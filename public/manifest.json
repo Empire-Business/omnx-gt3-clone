@@ -1,0 +1,22 @@
+{
+  "name": "OMNX GT3",
+  "short_name": "GT3",
+  "description": "Plataforma de gestão de times, projetos e processos",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0D1829",
+  "background_color": "#0D1829",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/favicon-omnx.png?v=5",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [],
+  "categories": ["productivity", "business"]
+}

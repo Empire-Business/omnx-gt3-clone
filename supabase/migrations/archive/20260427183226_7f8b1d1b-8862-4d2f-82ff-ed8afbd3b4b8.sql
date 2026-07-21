@@ -1,0 +1,1 @@
+UPDATE public.meetings SET status = 'completed', updated_at = now() WHERE id = '00533560-ec62-4754-abf3-536672c9cc0e' AND status = 'processing';

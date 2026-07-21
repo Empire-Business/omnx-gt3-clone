@@ -1,0 +1,64 @@
+project_id = "opbdoulspzlabxzevffc"
+
+[functions.create-employee]
+verify_jwt = false
+
+[functions.email-unread-chat]
+verify_jwt = false
+
+[functions.send-push]
+verify_jwt = false
+
+[functions.cami]
+verify_jwt = false
+
+[functions.manage-access]
+verify_jwt = false
+
+[functions.create-tenant]
+verify_jwt = false
+
+[functions.api]
+verify_jwt = false
+
+[functions.dispatch-webhook]
+verify_jwt = false
+
+[functions.process-ai]
+verify_jwt = false
+
+[functions.soniox-temp-key]
+verify_jwt = false
+
+[functions.meeting-ai]
+verify_jwt = false
+
+[functions.meeting-approve]
+verify_jwt = false
+
+[functions.ghl-webhook]
+verify_jwt = false
+
+[functions.livekit-token]
+verify_jwt = false
+
+[functions.livekit-webhook]
+verify_jwt = false
+
+[functions.livekit-end-room]
+verify_jwt = false
+
+[functions.livekit-start-huddle]
+verify_jwt = false
+
+[functions.livekit-guest-request]
+verify_jwt = false
+
+[functions.livekit-guest-decision]
+verify_jwt = false
+
+[functions.livekit-guest-token]
+verify_jwt = false
+
+[functions.livekit-guest-status]
+verify_jwt = false

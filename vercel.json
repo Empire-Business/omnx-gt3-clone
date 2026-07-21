@@ -1,0 +1,68 @@
+{
+    "rewrites": [
+        {
+            "source": "/auth/v1/(.*)",
+            "destination": "https://opbdoulspzlabxzevffc.supabase.co/auth/v1/$1"
+        },
+        {
+            "source": "/rest/v1/(.*)",
+            "destination": "https://opbdoulspzlabxzevffc.supabase.co/rest/v1/$1"
+        },
+        {
+            "source": "/functions/v1/(.*)",
+            "destination": "https://opbdoulspzlabxzevffc.supabase.co/functions/v1/$1"
+        },
+        {
+            "source": "/storage/v1/(.*)",
+            "destination": "https://opbdoulspzlabxzevffc.supabase.co/storage/v1/$1"
+        },
+        {
+            "source": "/realtime/v1/(.*)",
+            "destination": "https://opbdoulspzlabxzevffc.supabase.co/realtime/v1/$1"
+        },
+        {
+            "source": "/((?!assets/|favicon.ico|robots.txt|placeholder.svg|.*\\..*).*)",
+            "destination": "/index.html"
+        }
+    ],
+    "headers": [
+        {
+            "source": "/assets/(.*)",
+            "headers": [
+                {
+                    "key": "Cache-Control",
+                    "value": "public, max-age=31536000, immutable"
+                }
+            ]
+        },
+        {
+            "source": "/(.*)",
+            "headers": [
+                {
+                    "key": "X-Content-Type-Options",
+                    "value": "nosniff"
+                },
+                {
+                    "key": "X-Frame-Options",
+                    "value": "DENY"
+                },
+                {
+                    "key": "X-XSS-Protection",
+                    "value": "1; mode=block"
+                },
+                {
+                    "key": "Referrer-Policy",
+                    "value": "strict-origin-when-cross-origin"
+                },
+                {
+                    "key": "Permissions-Policy",
+                    "value": "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+                },
+                {
+                    "key": "Strict-Transport-Security",
+                    "value": "max-age=63072000; includeSubDomains; preload"
+                }
+            ]
+        }
+    ]
+}

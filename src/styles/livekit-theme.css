@@ -1,0 +1,256 @@
+/**
+ * LiveKit theme override — DS1 Silver Empire (v8.7.3)
+ * Mapeia tokens --lk-* para os tokens HSL do design system.
+ * Garante que toda a UI nativa do LiveKit (PreJoin, ControlBar, VideoConference,
+ * Chat, Participants) respeite o tema dark do OMNX GT3.
+ */
+
+[data-lk-theme="default"],
+[data-lk-theme="default"] .lk-room-container {
+  /* Backgrounds */
+  --lk-bg: hsl(var(--background));
+  --lk-bg2: hsl(var(--card));
+  --lk-bg3: hsl(var(--muted));
+  --lk-bg4: hsl(var(--muted));
+  --lk-bg5: hsl(var(--card));
+
+  /* Foregrounds */
+  --lk-fg: hsl(var(--foreground));
+  --lk-fg-secondary: hsl(var(--muted-foreground));
+  --lk-fg-tertiary: hsl(var(--muted-foreground));
+
+  /* Accents (primary / call-to-action) */
+  --lk-accent-bg: hsl(var(--primary));
+  --lk-accent-fg: hsl(var(--primary-foreground));
+  --lk-accent2: hsl(var(--primary));
+  --lk-accent3: hsl(var(--primary));
+  --lk-accent4: hsl(var(--primary));
+
+  /* Danger (leave / mute) */
+  --lk-danger: hsl(var(--destructive));
+  --lk-danger-bg: hsl(var(--destructive));
+  --lk-danger-fg: hsl(var(--destructive-foreground));
+  --lk-danger2: hsl(var(--destructive));
+  --lk-danger3: hsl(var(--destructive));
+  --lk-danger4: hsl(var(--destructive));
+
+  /* Borders */
+  --lk-border-color: hsl(var(--border));
+
+  /* Control bar */
+  --lk-control-bar-height: 64px;
+
+  /* Typography */
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+}
+
+/* Botões — bordas arredondadas e tipografia consistente */
+[data-lk-theme="default"] .lk-button,
+[data-lk-theme="default"] button.lk-button {
+  border-radius: var(--radius);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-weight: 500;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+[data-lk-theme="default"] .lk-button:hover {
+  background-color: hsl(var(--muted));
+}
+
+[data-lk-theme="default"] .lk-button:active {
+  transform: scale(0.97);
+}
+
+[data-lk-theme="default"] .lk-button[data-lk-source="camera"][aria-pressed="false"],
+[data-lk-theme="default"] .lk-button[data-lk-source="microphone"][aria-pressed="false"] {
+  background-color: hsl(var(--destructive) / 0.15);
+  color: hsl(var(--destructive));
+}
+
+[data-lk-theme="default"] .lk-disconnect-button,
+[data-lk-theme="default"] .lk-button.lk-danger {
+  background-color: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+
+[data-lk-theme="default"] .lk-disconnect-button:hover {
+  background-color: hsl(var(--destructive) / 0.9);
+}
+
+/* Tiles de vídeo — mesmo padrão dos cards do Kanban (sem borda, sombra sutil) */
+[data-lk-theme="default"] .lk-participant-tile,
+[data-lk-theme="default"] .lk-video-tile {
+  border-radius: 12px;
+  border: none !important;
+  outline: none;
+  overflow: hidden;
+  background-color: hsl(var(--card));
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  transition: box-shadow 100ms ease;
+}
+
+[data-lk-theme="default"] .lk-participant-tile:hover,
+[data-lk-theme="default"] .lk-video-tile:hover {
+  box-shadow: 0 4px 8px -2px rgb(0 0 0 / 0.10), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+}
+
+[data-lk-theme="default"] .lk-participant-tile[data-lk-speaking="true"] {
+  outline: 3px solid hsl(var(--primary));
+  outline-offset: -3px;
+  box-shadow:
+    0 0 0 1px hsl(var(--primary) / 0.4),
+    0 0 24px 0 hsl(var(--primary) / 0.35);
+  animation: lk-speaking-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes lk-speaking-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.4),
+      0 0 18px 0 hsl(var(--primary) / 0.30);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px hsl(var(--primary) / 0.6),
+      0 0 32px 2px hsl(var(--primary) / 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-lk-theme="default"] .lk-participant-tile[data-lk-speaking="true"] {
+    animation: none;
+  }
+}
+
+/* Remove bordas internas do video element (algumas versões do LiveKit aplicam) */
+[data-lk-theme="default"] .lk-participant-tile video,
+[data-lk-theme="default"] .lk-video-tile video {
+  border: none !important;
+  outline: none !important;
+}
+
+/* Stage container — fundo preto puro, padding generoso (Meet-style) */
+[data-lk-theme="default"] .lk-grid-layout,
+[data-lk-theme="default"] .lk-focus-layout {
+  background-color: #000;
+  padding: 16px;
+  gap: 12px;
+}
+
+/* Control bar container */
+[data-lk-theme="default"] .lk-control-bar {
+  background-color: hsl(var(--card));
+  border-top: 1px solid hsl(var(--border));
+  padding: 12px 16px;
+}
+
+/* Chat panel */
+[data-lk-theme="default"] .lk-chat {
+  background-color: hsl(var(--card));
+  border-left: 1px solid hsl(var(--border));
+}
+
+[data-lk-theme="default"] .lk-chat-header {
+  border-bottom: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+[data-lk-theme="default"] .lk-chat-form-input,
+[data-lk-theme="default"] .lk-form-control {
+  background-color: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+  border-radius: var(--radius);
+}
+
+[data-lk-theme="default"] .lk-chat-form-input:focus,
+[data-lk-theme="default"] .lk-form-control:focus {
+  outline: none;
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.2);
+}
+
+/* Participant name badge — Meet-style: pílula única bottom-left, inline */
+[data-lk-theme="default"] .lk-participant-metadata {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: auto;
+  top: auto;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  background-color: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 8px;
+  padding: 4px 10px;
+  backdrop-filter: blur(6px);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  max-width: calc(100% - 20px);
+}
+
+[data-lk-theme="default"] .lk-participant-name {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  backdrop-filter: none;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-lk-theme="default"] .lk-participant-metadata-item {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  backdrop-filter: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+[data-lk-theme="default"] .lk-participant-metadata-item svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* PreJoin — alinha ao tema */
+[data-lk-theme="default"] .lk-prejoin {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 4px);
+  padding: 24px;
+  color: hsl(var(--foreground));
+}
+
+[data-lk-theme="default"] .lk-prejoin input[type="text"] {
+  background-color: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+  border-radius: var(--radius);
+}
+
+[data-lk-theme="default"] .lk-prejoin .lk-button.lk-join-button {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+[data-lk-theme="default"] .lk-prejoin .lk-button.lk-join-button:hover {
+  background-color: hsl(var(--primary-hover));
+}
+
+/* ============================================================
+   Observação (v8.7.8): a ControlBar nativa do LiveKit foi
+   substituída por <MeetControlBar /> (shadcn + PT-BR). Os
+   overrides abaixo continuam servindo apenas ao PreJoin e
+   ao Chat nativo (renderizado dentro de um Sheet lateral).
+   ============================================================ */
+

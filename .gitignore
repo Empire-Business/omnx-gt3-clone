@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment variables — never commit secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Security — audit reports never go to git
+security-report/
+
+# Credentials
+*.pem
+*.key
+*.sqlite
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.vercel
+
+# Screenshots e artefatos de teste manual (não versionar)
+*.png
+.playwright-mcp/
+
+# Artefatos de extração/análise visual (Figma frames, canvas dumps, mockups locais)
+all-frames.json
+canvas-frames.json
+frame-texts.json
+redesign-frames.json
+unique-frames.json
+public/omnx-gt3-redesign.html
+
+# Supabase CLI temp files
+supabase/.temp/

@@ -1,0 +1,32 @@
+name: Regenerate SETUP_COMPLETE.sql
+
+# Roda automaticamente quando migrations mudam.
+# Pode rodar manual via "Actions" → "Run workflow" também.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dump schema do Supabase prod
+        uses: Empire-Business/omnx-dump-schema-action@v1
+        with:
+          db_url: ${{ secrets.PROD_DATABASE_URL }}
+          output: supabase/SETUP_COMPLETE.sql
+
+      - name: Commit se houver mudança
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(setup): regenerate SETUP_COMPLETE.sql via dump-schema'
+          file_pattern: 'supabase/SETUP_COMPLETE.sql'

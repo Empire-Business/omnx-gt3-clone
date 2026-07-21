@@ -1,0 +1,1094 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   EMPIRE MANAGER — DS1 SILVER EMPIRE v2.0
+   "Power through restraint. Authority through
+    typography. Gold with parsimony."
+   ============================================
+   REGRA DE OURO:
+   ❌ NUNCA usar cores hardcoded em componentes
+   ✅ SEMPRE usar tokens semânticos via Tailwind
+
+   Arquitetura de 3 camadas:
+   1. Primitivos  → paleta DS1 raw (NÃO usar diretamente)
+   2. Semânticos  → aliases com propósito (usar nos componentes)
+   3. Componentes → gradients, shadows, kinetics
+   ============================================ */
+
+@layer base {
+  :root {
+    /* ════════════════════════════════════════════
+       CAMADA 1: PRIMITIVOS DS1 (NÃO usar diretamente)
+       ════════════════════════════════════════════ */
+
+    /* ── DS1 Raw Palette ── */
+    --ds1-void:      222 49% 5%;       /* #070C14 */
+    --ds1-empire:    216 52% 11%;      /* #0D1829 */
+    --ds1-steel:     213 41% 24%;      /* #243B55 */
+    --ds1-platinum:  213 10% 78%;      /* #BFC5CC */
+    --ds1-gold:      41 53% 52%;       /* #C9A240 */
+    --ds1-bone:      36 33% 93%;       /* #F2EFE8 */
+    --ds1-ink:       226 28% 14%;      /* #1A1F2E */
+    --ds1-ghost:     36 10% 88%;       /* #E4E2DC */
+    --ds1-mist:      40 22% 96%;       /* #F7F6F2 */
+    --ds1-white:     0 0% 100%;        /* #FFFFFF */
+    --ds1-danger:    0 50% 36%;        /* #8B2E2E */
+
+    /* ── Blue (Acquisition / Aquisição) ── */
+    --blue-500: 217 91% 60%;
+    --blue-600: 221 83% 53%;
+
+    /* ── Green (Delivery / Entrega) ── */
+    --green-500: 160 84% 39%;
+    --green-600: 161 94% 30%;
+
+    /* ── Amber (Operation / Operação) ── */
+    --amber-500: 38 92% 50%;
+    --amber-600: 32 95% 44%;
+
+    /* ── Red (Danger / Destructive) ── */
+    --red-500: 0 84% 60%;
+    --red-600: 0 72% 51%;
+
+    /* ════════════════════════════════════════════
+       CAMADA 2: SEMÂNTICOS — GT3 OMNX v3 (Flat Modern)
+       Light mode: cool neutral surfaces, separação por
+       tom (não por borda), primary azul-grafite suave,
+       status soft tonal.
+       ════════════════════════════════════════════ */
+
+    /* ── Layout / Canvas / Surface ── */
+    --background:           225 17% 98%;    /* bg cool */
+    --foreground:           225 18% 14%;    /* deep slate */
+
+    --card:                 0 0% 100%;      /* elevated white */
+    --card-foreground:      225 18% 14%;
+
+    --popover:              0 0% 100%;
+    --popover-foreground:   225 18% 14%;
+
+    /* ── Brand / Action Primary: Azul-grafite suave ── */
+    --primary:              230 50% 47%;    /* graphite blue */
+    --primary-foreground:   0 0% 100%;
+    --primary-light:        225 40% 95%;    /* primary-soft */
+    --primary-hover:        230 52% 42%;
+    --primary-glow:         230 50% 47% / 0.12;
+    --primary-muted:        230 50% 47% / 0.06;
+
+    /* ── Secondary surface (low neutral) ── */
+    --secondary:            225 11% 96%;    /* bg-subtle */
+    --secondary-foreground: 225 18% 14%;
+
+    /* ── Muted (neutral surface) ── */
+    --muted:                225 10% 94%;    /* bg-hover */
+    --muted-foreground:     225 8% 45%;     /* fg-muted */
+
+    /* ── Accent (subtle hover surface) ── */
+    --accent:               225 11% 96%;
+    --accent-foreground:    230 50% 47%;
+
+    /* ── Destructive ── */
+    --destructive:          0 75% 42%;      /* error #ba1a1a */
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Cores de Área (Estrutura T — flat modern) ── */
+    --area-acquisition:            225 55% 55%;
+    --area-acquisition-foreground: 0 0% 100%;
+    --area-acquisition-light:      225 45% 94%;
+    --area-acquisition-muted:      225 45% 97%;
+
+    --area-delivery:               160 45% 42%;
+    --area-delivery-foreground:    0 0% 100%;
+    --area-delivery-light:         160 40% 92%;
+    --area-delivery-muted:         160 40% 96%;
+
+    --area-operation:              40 65% 52%;
+    --area-operation-foreground:   0 0% 100%;
+    --area-operation-light:        40 75% 92%;
+    --area-operation-muted:        40 75% 96%;
+
+    /* ── Status Semântico (Flat Modern — soft tonal) ── */
+    --success:              155 40% 38%;            /* exec/done base */
+    --success-foreground:   0 0% 100%;
+    --success-light:        155 45% 93%;
+
+    --warning:              40 60% 50%;             /* review */
+    --warning-foreground:   40 90% 12%;
+    --warning-light:        40 75% 94%;
+
+    --danger:               15 60% 48%;             /* blocked */
+    --danger-foreground:    0 0% 100%;
+    --danger-light:         15 55% 95%;
+
+    --info:                 215 50% 48%;            /* plan */
+    --info-foreground:      0 0% 100%;
+    --info-light:           215 50% 95%;
+
+    /* ── Border & Ring (quase invisível, tom-on-tom) ── */
+    --border:               225 8% 89%;             /* nearly invisible */
+    --input:                225 8% 89%;
+    --ring:                 230 50% 47%;            /* graphite blue */
+
+    /* ── Radius scale (OMNX-GT3 spec: 5 / 7 / 9 / 12 px) ── */
+    --r-sm: 0.3125rem;   /* 5px  — inputs, badges */
+    --r:    0.4375rem;   /* 7px  — buttons, default cards */
+    --r-md: 0.5625rem;   /* 9px  — larger cards */
+    --r-lg: 0.75rem;     /* 12px — modals, containers, message bubbles */
+    --radius: var(--r);
+
+    /* ── Surface extras ── */
+    --bg-active: 225 12% 92%;        /* selected list rows, active states */
+
+    /* ── Status aliases (OMNX-GT3 nomenclature) ── */
+    --plan:      var(--info);        --plan-bg:    var(--info-light);
+    --exec:      var(--success);     --exec-bg:    var(--success-light);
+    --review:    var(--warning);     --review-bg:  var(--warning-light);
+    --done:      280 25% 55%;        --done-bg:    280 30% 95%;
+    --blocked:   var(--danger);      --blocked-bg: var(--danger-light);
+
+    /* ── Sidebar (cool, sligthly off main bg) ── */
+    --sidebar-background:          225 14% 97%;
+    --sidebar-foreground:          225 18% 14%;
+    --sidebar-primary:             230 50% 47%;
+    --sidebar-primary-foreground:  0 0% 100%;
+    --sidebar-accent:              225 10% 94%;
+    --sidebar-accent-foreground:   225 18% 14%;
+    --sidebar-border:              225 8% 89%;
+    --sidebar-ring:                230 50% 47%;
+
+    /* ════════════════════════════════════════════
+       CAMADA 3: COMPONENTES (gradients, shadows, kinetics)
+       DS1: Shadow color from void rgba(7,12,20,…)
+       ════════════════════════════════════════════ */
+
+    /* ── Shadows (Flat Modern: soft, not crisp) ── */
+    --shadow-sm: 0 1px 2px rgba(30,38,55,0.04);
+    --shadow-md: 0 2px 8px rgba(30,38,55,0.06), 0 1px 2px rgba(30,38,55,0.04);
+    --shadow-lg: 0 8px 24px rgba(30,38,55,0.08), 0 2px 6px rgba(30,38,55,0.05);
+    --shadow-xl: 0 12px 40px rgba(30,38,55,0.12), 0 4px 12px rgba(30,38,55,0.06);
+    /* legacy gold glow tokens — kept for compat, mapped to soft elevation */
+    --shadow-gold: 0 2px 8px rgba(30,38,55,0.06);
+    --shadow-gold-lg: 0 8px 24px rgba(30,38,55,0.08);
+    /* Elevation */
+    --shadow-elevation-1: 0 1px 2px rgba(30,38,55,0.04);
+    --shadow-elevation-2: 0 2px 8px rgba(30,38,55,0.06), 0 1px 2px rgba(30,38,55,0.04);
+    --shadow-elevation-3: 0 8px 24px rgba(30,38,55,0.08), 0 2px 6px rgba(30,38,55,0.05);
+
+    /* ── Gradients (DS1: gold gradient for top borders) ── */
+    --gradient-gold: linear-gradient(90deg, #C9A240, transparent);
+    --gradient-empire: linear-gradient(135deg, #0D1829, #1A1F2E);
+    --gradient-sidebar-active: linear-gradient(90deg, #F7F6F2, #F2EFE8);
+
+    /* ── Motion (DS1 easing curves) ── */
+    --ease-out: cubic-bezier(0.0, 0.0, 0.2, 1.0);
+    --ease-in-out: cubic-bezier(0.4, 0.0, 0.2, 1.0);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1.0);
+    --duration-fast: 150ms;
+    --duration-base: 280ms;
+    --duration-slow: 500ms;
+    --duration-slower: 800ms;
+    --transition-fast: 150ms cubic-bezier(0.0, 0.0, 0.2, 1.0);
+    --transition-spring: 280ms cubic-bezier(0.34, 1.56, 0.64, 1.0);
+  }
+
+  /* ════════════════════════════════════════════
+     DARK MODE — DS1 Silver Empire
+     Empire navy + void depth. Platinum/silver accents.
+     Elevation via luminosity. No pure blacks.
+     ════════════════════════════════════════════ */
+  .dark {
+    --background:           225 22% 8%;       /* deep slate */
+    --foreground:           225 12% 88%;      /* cool light */
+
+    --card:                 225 20% 12%;      /* elevated */
+    --card-foreground:      225 12% 92%;
+
+    --popover:              225 20% 14%;
+    --popover-foreground:   225 12% 92%;
+
+    --primary:              230 60% 72%;      /* graphite blue light */
+    --primary-foreground:   225 30% 12%;
+    --primary-light:        230 30% 22%;
+    --primary-hover:        230 65% 78%;
+    --primary-glow:         230 60% 72% / 0.22;
+    --primary-muted:        230 60% 72% / 0.08;
+
+    --secondary:            225 18% 20%;
+    --secondary-foreground: 225 12% 92%;
+
+    --muted:                225 18% 16%;
+    --muted-foreground:     225 14% 75%;
+
+    --accent:               225 18% 18%;
+    --accent-foreground:    230 60% 80%;
+
+    --destructive:          0 50% 44%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Áreas (Dark) ── */
+    --area-acquisition:            217 91% 65%;
+    --area-acquisition-foreground: 0 0% 100%;
+    --area-acquisition-light:      217 50% 20%;
+    --area-acquisition-muted:      217 40% 15%;
+
+    --area-delivery:               160 84% 45%;
+    --area-delivery-foreground:    0 0% 100%;
+    --area-delivery-light:         160 50% 18%;
+    --area-delivery-muted:         160 40% 13%;
+
+    --area-operation:              38 92% 55%;
+    --area-operation-foreground:   0 0% 100%;
+    --area-operation-light:        38 50% 20%;
+    --area-operation-muted:        38 40% 15%;
+
+    /* ── Status (Dark — lighter for contrast) ── */
+    --success:              142 60% 50%;
+    --success-foreground:   0 0% 100%;
+    --success-light:        142 40% 18%;
+
+    --warning:              41 53% 52%;
+    --warning-foreground:   216 52% 11%;
+    --warning-light:        41 40% 18%;
+
+    --danger:               0 60% 55%;
+    --danger-foreground:    0 0% 100%;
+    --danger-light:         0 40% 18%;
+
+    --info:                 217 91% 65%;
+    --info-foreground:      0 0% 100%;
+    --info-light:           217 40% 18%;
+
+    /* ── Border & Ring (Dark — quase invisível) ── */
+    --border:               225 12% 88% / 0.16;
+    --input:                225 12% 88% / 0.20;
+    --ring:                 230 60% 72%;
+
+    /* Surface extras + status aliases (Dark) */
+    --bg-active: 225 18% 18%;
+    --done:      280 30% 70%;
+    --done-bg:   280 25% 22%;
+
+    /* ── Sidebar (Dark — leve off do bg) ── */
+    --sidebar-background:          225 22% 10%;
+    --sidebar-foreground:          225 12% 88%;
+    --sidebar-primary:             230 60% 72%;
+    --sidebar-primary-foreground:  225 30% 12%;
+    --sidebar-accent:              225 18% 22%;
+    --sidebar-accent-foreground:   225 12% 92%;
+    --sidebar-border:              225 12% 88% / 0.12;
+    --sidebar-ring:                230 60% 72%;
+
+    /* ── Shadows (Dark — soft) ── */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.25);
+    --shadow-xl: 0 12px 40px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.3);
+    --shadow-gold: 0 2px 8px rgba(0,0,0,0.35);
+    --shadow-gold-lg: 0 8px 24px rgba(0,0,0,0.4);
+    --shadow-elevation-1: 0 1px 2px rgba(0,0,0,0.3);
+    --shadow-elevation-2: 0 2px 8px rgba(0,0,0,0.35);
+    --shadow-elevation-3: 0 8px 24px rgba(0,0,0,0.4);
+
+    /* ── Gradients (Dark — silver/platinum) ── */
+    --gradient-gold: linear-gradient(90deg, #BFC5CC, transparent);
+    --gradient-empire: linear-gradient(135deg, #0D1829, #243B55);
+    --gradient-sidebar-active: linear-gradient(90deg, rgba(191,197,204,0.08), rgba(191,197,204,0.03));
+  }
+
+  /* ════════════════════════════════════════════
+     TASKS LEGACY SCOPE — preserva radius/shadow anteriores
+     no módulo de Tarefas (sem mudanças bruscas).
+     Aplicar via className="tasks-legacy-style" no wrapper.
+     ════════════════════════════════════════════ */
+  .tasks-legacy-style {
+    --radius: 0.25rem;
+    --shadow-sm: 0 1px 3px rgba(7,12,20,0.08), 0 1px 2px rgba(7,12,20,0.04);
+    --shadow-md: 0 4px 16px rgba(7,12,20,0.10), 0 2px 6px rgba(7,12,20,0.06);
+    --shadow-lg: 0 16px 48px rgba(7,12,20,0.14), 0 6px 16px rgba(7,12,20,0.08);
+    --shadow-xl: 0 32px 80px rgba(7,12,20,0.20), 0 12px 32px rgba(7,12,20,0.12);
+    --shadow-elevation-1: 0 1px 3px rgba(7,12,20,0.08), 0 1px 2px rgba(7,12,20,0.04);
+    --shadow-elevation-2: 0 4px 16px rgba(7,12,20,0.10), 0 2px 6px rgba(7,12,20,0.06);
+    --shadow-elevation-3: 0 16px 48px rgba(7,12,20,0.14), 0 6px 16px rgba(7,12,20,0.08);
+  }
+  .dark .tasks-legacy-style {
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25);
+    --shadow-lg: 0 16px 48px rgba(0,0,0,0.4), 0 6px 16px rgba(0,0,0,0.3);
+    --shadow-xl: 0 32px 80px rgba(0,0,0,0.5), 0 12px 32px rgba(0,0,0,0.35);
+    --shadow-elevation-1: 0 1px 3px rgba(0,0,0,0.3);
+    --shadow-elevation-2: 0 4px 16px rgba(0,0,0,0.35);
+    --shadow-elevation-3: 0 16px 48px rgba(0,0,0,0.4), 0 0 20px rgba(191,197,204,0.1);
+  }
+}
+
+/* ════════════════════════════════════════════
+   BASE STYLES — DS1 Silver Empire
+   ════════════════════════════════════════════ */
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-feature-settings: "cv02","cv03","cv04","cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Inter', system-ui, sans-serif;
+    @apply font-semibold;
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Display headings — agora usam Inter (Cormorant removido por padrão OMNX-GT3) ── */
+  .font-display {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Mono labels use IBM Plex Mono ── */
+  .font-mono {
+    font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  }
+
+  /* ── Focus-visible accessibility (WCAG AA) ── */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background rounded-sm;
+  }
+
+  /* ── Smooth scroll ── */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* ── Reduced motion accessibility ── */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* ── Print styles ── */
+  @media print {
+    body {
+      background: white !important;
+      color: black !important;
+    }
+    nav, aside, .no-print, [role="navigation"] {
+      display: none !important;
+    }
+    main {
+      width: 100% !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+  }
+}
+
+/* ════════════════════════════════════════════
+   ANIMATIONS — DS1 Motion System
+   Only transform + opacity. Physical, not decorative.
+   ════════════════════════════════════════════ */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.96); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+@keyframes lineGrow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s var(--ease-out) forwards;
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.5s var(--ease-out) forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s var(--ease-out) forwards;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ── Premium shimmer for skeletons ── */
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--muted-foreground) / 0.08) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite ease-in-out;
+}
+
+.skeleton-premium {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 0%,
+    hsl(var(--muted) / 0.3) 20%,
+    hsl(var(--muted) / 0.5) 40%,
+    hsl(var(--muted) / 0.3) 60%,
+    hsl(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+  border-radius: var(--radius);
+}
+
+/* ── DS1 Stagger animations (30-50ms per item) ── */
+.stagger-enter {
+  animation: fade-in-up 0.4s var(--ease-out) forwards;
+  opacity: 0;
+}
+
+.stagger-enter:nth-child(1) { animation-delay: 0ms; }
+.stagger-enter:nth-child(2) { animation-delay: 40ms; }
+.stagger-enter:nth-child(3) { animation-delay: 80ms; }
+.stagger-enter:nth-child(4) { animation-delay: 120ms; }
+.stagger-enter:nth-child(5) { animation-delay: 160ms; }
+.stagger-enter:nth-child(6) { animation-delay: 200ms; }
+.stagger-enter:nth-child(7) { animation-delay: 240ms; }
+.stagger-enter:nth-child(8) { animation-delay: 280ms; }
+.stagger-enter:nth-child(9) { animation-delay: 320ms; }
+.stagger-enter:nth-child(10) { animation-delay: 360ms; }
+
+/* ── DS1 Scroll Reveal ── */
+.reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: opacity var(--duration-slower) var(--ease-out),
+              transform var(--duration-slower) var(--ease-out);
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-delay-1 { transition-delay: 80ms; }
+.reveal-delay-2 { transition-delay: 160ms; }
+.reveal-delay-3 { transition-delay: 240ms; }
+.reveal-delay-4 { transition-delay: 320ms; }
+.reveal-delay-5 { transition-delay: 400ms; }
+
+/* ════════════════════════════════════════════
+   UTILITY CLASSES — DS1 Silver Empire
+   ════════════════════════════════════════════ */
+@layer utilities {
+  /* ── Shadows ── */
+  .shadow-card { box-shadow: var(--shadow-sm); }
+  .shadow-card-hover { box-shadow: var(--shadow-lg); }
+  .shadow-panel { box-shadow: var(--shadow-xl); }
+  .shadow-gold { box-shadow: var(--shadow-gold); }
+  .shadow-gold-lg { box-shadow: var(--shadow-gold-lg); }
+  .shadow-elevation-1 { box-shadow: var(--shadow-elevation-1); }
+  .shadow-elevation-2 { box-shadow: var(--shadow-elevation-2); }
+  .shadow-elevation-3 { box-shadow: var(--shadow-elevation-3); }
+
+  /* ── DS1 Gradients ── */
+  .gradient-gold { background: var(--gradient-gold); }
+  .gradient-empire { background: var(--gradient-empire); }
+
+  /* ── DS1 Gold top border (cards) ── */
+  .gold-top-border {
+    position: relative;
+  }
+  .gold-top-border::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #C9A240, transparent);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  /* ── Empire accent bar (light mode cards) ── */
+  .empire-top-border {
+    position: relative;
+  }
+  .empire-top-border::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: #0D1829;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .dark .empire-top-border::before {
+    background: linear-gradient(90deg, #C9A240, transparent);
+    height: 2px;
+  }
+
+  /* ── DS1 Section label (gold eyebrow) ── */
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #C9A240;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .section-label::before {
+    content: '';
+    display: inline-block;
+    width: 24px;
+    height: 1px;
+    background: #C9A240;
+  }
+
+  /* ── Typography ── */
+  .text-2xs { font-size: 0.6875rem; line-height: 1rem; }
+  .text-display {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+  .text-h1 {
+    font-size: 1.375rem;      /* 22px — Flat Modern h1 */
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+  }
+  .text-metric {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+
+  /* ── GT3 Typography roles ── */
+  .text-headline-lg { font-size: 20px; font-weight: 600; line-height: 28px; }
+  .text-headline-md { font-size: 16px; font-weight: 600; line-height: 24px; }
+  .text-body-md     { font-size: 14px; font-weight: 400; line-height: 20px; }
+  .text-body-sm     { font-size: 13px; font-weight: 400; line-height: 18px; }
+
+  /* ── Label caps (table headers, section eyebrows) ── */
+  .text-label-caps {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* ── Status pills (small bold uppercase) ── */
+  .text-status-pill {
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* ── Entity Card hover (Modern Corporate: subtle border tint, no lift) ── */
+  .entity-card-hover {
+    transition: background-color var(--duration-fast) var(--ease-out),
+                border-color var(--duration-fast) var(--ease-out),
+                box-shadow var(--duration-fast) var(--ease-out);
+  }
+  .entity-card-hover:hover {
+    border-color: hsl(var(--primary) / 0.35);
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.08), var(--shadow-sm);
+  }
+
+  /* Dark mode — preserve subtle hover */
+  .dark .entity-card-hover:hover {
+    border-color: hsl(var(--primary) / 0.5);
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.15), var(--shadow-md);
+  }
+
+  /* ── DS1 Button styles ── */
+  .btn-empire {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border-radius: 3px;
+    white-space: nowrap;
+    transition: all var(--duration-base) var(--ease-out);
+  }
+  .btn-empire:hover {
+    transform: translateY(-1px);
+  }
+  .btn-empire:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  /* ── Gold glow effect (DS1 btn-gold) ── */
+  .btn-gold-glow {
+    position: relative;
+    box-shadow: var(--shadow-sm);
+    transition: all var(--duration-base) var(--ease-out);
+  }
+  .btn-gold-glow:hover {
+    box-shadow: var(--shadow-gold-lg);
+    transform: translateY(-1px);
+  }
+  .btn-gold-glow:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  /* ── Glassmorphism (nav, topbar) ── */
+  .glass {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  /* ── Org chart connector lines ── */
+  .org-connector {
+    @apply relative;
+  }
+  .org-connector::before {
+    content: '';
+    @apply absolute top-0 left-1/2 -translate-x-1/2 w-px bg-border;
+    height: 24px;
+    top: -24px;
+  }
+
+  /* ── Scrollbar (DS1 — minimal, restrained) ── */
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { @apply bg-transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground; }
+
+  /* ── Scrollbar global — sutil em todo o app ── */
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { @apply bg-transparent; }
+  *::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background-color: hsl(var(--border));
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.6);
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-corner { @apply bg-transparent; }
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  /* ── Film Grain Overlay (DS1 texture) ── */
+  .film-grain::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0.02;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 128px 128px;
+  }
+}
+
+/* ════════════════════════════════════════════
+   PROSE / MARKDOWN STYLES — DS1 Editorial
+   ════════════════════════════════════════════ */
+.prose {
+  --tw-prose-body: hsl(var(--foreground));
+  --tw-prose-headings: hsl(var(--foreground));
+  --tw-prose-links: hsl(var(--accent));
+  --tw-prose-bold: hsl(var(--foreground));
+  --tw-prose-counters: hsl(var(--muted-foreground));
+  --tw-prose-bullets: hsl(var(--muted-foreground));
+  --tw-prose-hr: hsl(var(--border));
+  --tw-prose-quotes: hsl(var(--muted-foreground));
+  --tw-prose-quote-borders: hsl(var(--accent));
+  --tw-prose-code: hsl(var(--foreground));
+  --tw-prose-pre-code: hsl(var(--foreground));
+  --tw-prose-pre-bg: hsl(var(--muted));
+  --tw-prose-th-borders: hsl(var(--border));
+  --tw-prose-td-borders: hsl(var(--border));
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.prose h1 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 2rem;
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  letter-spacing: -0.02em;
+}
+.prose h2 {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+  letter-spacing: -0.01em;
+}
+.prose h3 { font-size: 1.25rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+.prose h4 { font-size: 1.0625rem; font-weight: 600; margin-top: 1.25rem; margin-bottom: 0.5rem; }
+
+.prose p { margin-top: 0.75rem; margin-bottom: 0.75rem; }
+.prose a { color: hsl(var(--accent)); text-decoration: underline; text-underline-offset: 2px; }
+.prose a:hover { opacity: 0.8; }
+
+.prose strong { font-weight: 600; }
+
+.prose ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.75rem 0; }
+.prose ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.75rem 0; }
+.prose li { margin: 0.25rem 0; }
+.prose li > ul, .prose li > ol { margin: 0.25rem 0; }
+
+.prose blockquote {
+  border-left: 3px solid hsl(var(--accent));
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+  background: hsl(var(--muted) / 0.5);
+  border-radius: 0 6px 6px 0;
+  font-style: italic;
+}
+.prose blockquote p { margin: 0.25rem 0; }
+
+.prose code {
+  background: hsl(var(--muted));
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+}
+
+.prose pre {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.prose pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+.prose th {
+  text-align: left;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.5);
+  color: hsl(var(--muted-foreground));
+}
+.prose td {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.prose tr:hover td { background: hsl(var(--muted) / 0.3); }
+
+.prose hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1.5rem 0;
+}
+
+.prose img {
+  border-radius: 12px;
+  margin: 1rem 0;
+  max-width: 100%;
+}
+
+.prose input[type="checkbox"] {
+  margin-right: 0.5rem;
+  accent-color: hsl(var(--accent));
+}
+
+/* ============================================
+   TipTap / ProseMirror Editor Styles
+   ============================================ */
+.ProseMirror {
+  outline: none;
+  line-height: 1.625;
+  caret-color: hsl(var(--primary));
+}
+
+.ProseMirror > * + * {
+  margin-top: 0.5em;
+}
+
+/* Placeholder — show on every empty block for Notion-like feel */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: hsl(var(--muted-foreground) / 0.5);
+  pointer-events: none;
+  height: 0;
+  font-style: italic;
+}
+
+/* Headings — clear hierarchy with spacing */
+.ProseMirror h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.02em;
+}
+.ProseMirror h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+}
+.ProseMirror h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Paragraphs — comfortable reading */
+.ProseMirror p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+/* Lists */
+.ProseMirror ul, .ProseMirror ol {
+  padding-left: 1.5rem;
+}
+.ProseMirror li {
+  margin: 0.125em 0;
+}
+.ProseMirror li > p {
+  margin: 0;
+}
+
+/* Task lists */
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.125rem 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.3rem;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  accent-color: hsl(var(--primary));
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+
+/* Checked task items — strikethrough effect */
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Tables */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  border: 1px solid hsl(var(--border));
+  padding: 0.5rem 0.75rem;
+  min-width: 80px;
+  vertical-align: top;
+}
+
+.ProseMirror table th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+}
+
+.ProseMirror table .selectedCell {
+  background-color: hsl(var(--accent) / 0.3);
+}
+
+/* Marks */
+.ProseMirror mark {
+  background-color: hsl(var(--accent) / 0.3);
+  border-radius: 2px;
+  padding: 0.125em 0.25em;
+}
+
+.ProseMirror code {
+  background-color: hsl(var(--muted));
+  border-radius: 0.25rem;
+  padding: 0.125em 0.375em;
+  font-size: 0.875em;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Blockquote — Notion-style */
+.ProseMirror blockquote {
+  border-left: 3px solid hsl(var(--primary));
+  padding-left: 1rem;
+  color: hsl(var(--muted-foreground));
+  margin: 1rem 0;
+}
+
+/* Horizontal rule */
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 2rem 0;
+}
+
+/* Images — hover effect */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  transition: box-shadow 0.2s ease-out;
+  cursor: pointer;
+}
+.ProseMirror img:hover {
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.3);
+}
+.ProseMirror img.ProseMirror-selectednode {
+  box-shadow: 0 0 0 2px hsl(var(--primary));
+}
+
+/* Links */
+.ProseMirror a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: opacity 0.15s ease-out;
+}
+.ProseMirror a:hover {
+  opacity: 0.8;
+}
+
+/* Code blocks */
+.ProseMirror pre {
+  background-color: hsl(var(--muted));
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+.ProseMirror pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.875rem;
+}
+
+/* Selection styling */
+.ProseMirror ::selection {
+  background-color: hsl(var(--primary) / 0.2);
+}
+
+/* Bubble menu transitions */
+.tippy-box[data-animation="fade"][data-state="hidden"] {
+  opacity: 0;
+}
+.tippy-box[data-animation="fade"][data-state="visible"] {
+  opacity: 1;
+}
