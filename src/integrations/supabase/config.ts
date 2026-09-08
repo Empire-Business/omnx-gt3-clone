@@ -1,18 +1,34 @@
-// Credenciais públicas do Supabase usadas como fallback de build.
-// A URL e a anon/publishable key são PÚBLICAS por design (vão para o bundle JS de
-// qualquer forma e são protegidas por RLS) — não confundir com a service_role, que
-// NUNCA pode aparecer no frontend.
-//
-// Por que o fallback existe: a publicação via Lovable (produção em gt3.omnx.pro,
-// servida por Cloudflare) NÃO injeta variáveis VITE_* no build do frontend. Sem o
-// fallback, o bundle publicado sai com import.meta.env.VITE_SUPABASE_* === undefined
-// e o app quebra com "Missing Supabase environment variables".
-// import.meta.env continua tendo prioridade, então Vercel/local seguem usando o .env.
-// Exceção consciente à regra "sem fallback hardcoded" do CLAUDE.md — ver §2.
-const FALLBACK_SUPABASE_URL = "https://opbdoulspzlabxzevffc.supabase.co";
-const FALLBACK_SUPABASE_PROJECT_ID = "opbdoulspzlabxzevffc";
-const FALLBACK_SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wYmRvdWxzcHpsYWJ4emV2ZmZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2MzEyNDgsImV4cCI6MjA4NzIwNzI0OH0.MTa39BraEgvkq0O2eKK9cnumxkAW-Vm5nwBkREMNurY";
+/*
+ * ESTE ARQUIVO SUBSTITUI O `config.ts` NO REPOSITÓRIO-TEMPLATE.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Não é usado no desenvolvimento daqui. A sincronização com o `omnx-gt3-clone`
+ * (ver `scripts/sincronizar-template-local.mjs`) copia este conteúdo POR CIMA do
+ * `config.ts` de lá. Quem clona a plataforma recebe esta versão.
+ *
+ * POR QUE OS DOIS PRECISAM SER DIFERENTES
+ *
+ * O `config.ts` de verdade traz, embutidos, o endereço e a chave pública do
+ * banco de produção da OMNX — e PRECISA trazer: a produção do gt3.omnx.pro roda
+ * na Vercel sem nenhuma variável de ambiente cadastrada, então o fallback é o
+ * que sustenta o site no ar. Tirá-lo de lá derruba a produção no próximo deploy.
+ *
+ * Só que o mesmo arquivo ia para o template de clonagem, e ali o efeito é o
+ * oposto: o cliente clona, esquece de preencher o `.env`, e o app DELE conecta
+ * no banco de produção DA OMNX. Nada quebra — ele cria conta, usa o sistema, e
+ * os dados dele entram na nossa base. É por não quebrar que ninguém descobre.
+ *
+ * Aqui os fallbacks estão vazios: sem `.env` configurado, o app para com uma
+ * mensagem dizendo o que fazer. Falhar alto é melhor que funcionar no banco de
+ * outra empresa.
+ *
+ * ⚠️ Este arquivo espelha o `config.ts`. Se lá mudar a lista de funções
+ * exportadas, a sincronização avisa — mas o conteúdo daqui é seu para manter.
+ */
+
+const FALLBACK_SUPABASE_URL = "";
+const FALLBACK_SUPABASE_PROJECT_ID = "";
+const FALLBACK_SUPABASE_ANON_KEY = "";
 
 // Chave VAPID PÚBLICA do Web Push. Mesma natureza da anon key: é entregue ao
 // navegador de qualquer forma (vai como `applicationServerKey` na inscrição) e
@@ -28,8 +44,7 @@ const FALLBACK_SUPABASE_ANON_KEY =
 // IMPORTANTE: precisa ser o PAR da VAPID_PRIVATE_KEY configurada nos Secrets
 // das Edge Functions. Se a privada for rotacionada, atualize aqui também —
 // senão o serviço de push rejeita todos os envios.
-const FALLBACK_VAPID_PUBLIC_KEY =
-  "BMd1od1G6uJKpGeYjrxkz2gxr9kDaqzv-2CnPEXGjm_8nWx9fiVt3RBY6yFb-ye5KE0DBnG_tR2yamRH9zOEDfQ";
+const FALLBACK_VAPID_PUBLIC_KEY = "";
 
 const DEFAULT_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || FALLBACK_SUPABASE_URL;
 const DEFAULT_STORAGE_KEY_PREFIX =
@@ -44,6 +59,31 @@ const DEFAULT_STORAGE_KEY_PREFIX =
 // reverso (ex.: Vercel com vercel.json) que encaminhe `/auth/v1/*`, `/rest/v1/*`,
 // `/functions/v1/*`, `/storage/v1/*` e `/realtime/v1/*` ao projeto Supabase.
 // Hospedagens Lovable NÃO fazem esse rewrite — usam SPA fallback que retorna HTML.
+
+/*
+ * Sem configuração, o app para aqui — de propósito.
+ *
+ * Um cliente que clona e roda sem preencher o `.env` merece uma frase que diz o
+ * que fazer, e não uma tela branca com "failed to fetch" no console.
+ */
+if (!DEFAULT_SUPABASE_URL) {
+  throw new Error(
+    [
+      "Faltam as credenciais do Supabase.",
+      "",
+      "Copie o arquivo .env.example para .env e preencha com os dados do SEU projeto:",
+      "  VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co",
+      "  VITE_SUPABASE_PUBLISHABLE_KEY=a chave anon public",
+      "",
+      "Onde achar: painel do Supabase, em Settings > API.",
+      "Use a chave anon public — NUNCA a service_role, que passa por cima de toda a",
+      "seguranca do banco e nao pode aparecer no navegador.",
+      "",
+      "Depois de salvar o .env, pare e suba o servidor de novo.",
+    ].join(String.fromCharCode(10)),
+  );
+}
+
 const SAME_ORIGIN_PROXY_HOSTS = new Set<string>([]);
 
 function shouldUseSameOriginProxy() {
