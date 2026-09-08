@@ -52,3 +52,8 @@ public/omnx-gt3-redesign.html
 
 # Supabase CLI temp files
 supabase/.temp/
+
+# Claude Code — estado local da máquina. O settings.local.json acumula comandos
+# permitidos com tokens colados dentro (sbp_..., service_role); não versionar.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

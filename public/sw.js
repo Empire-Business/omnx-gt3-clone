@@ -13,8 +13,14 @@ self.addEventListener("push", (event) => {
   const title = payload.title || "GT3 — Nova mensagem no chat";
   const options = {
     body: payload.body || "Você recebeu uma nova mensagem.",
-    icon: payload.icon || `${origin}/logo.png`,
-    badge: `${origin}/logo.png`,
+    // Resolvido SEMPRE pelo origin do próprio SW, nunca por URL absoluta vinda
+    // do servidor: o payload dependia de SITE_URL, e com esse env apontando
+    // para um domínio morto a imagem não carregava — o Android então desenhava
+    // um círculo branco vazio no lugar do ícone.
+    icon: `${origin}/favicon-omnx.png`,
+    // Sem `badge` de propósito. O badge exige PNG MONOCROMÁTICO com alpha (o
+    // Android o usa como máscara na barra de status); passar um ícone colorido
+    // vira um borrão branco. Sem ele, o Chrome usa o ícone do próprio site.
     tag: payload.tag || "chat",
     data: payload.data || { url: "/chat" },
     vibrate: [200, 100, 200],
@@ -45,7 +51,12 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || "/chat";
+  // Aceita tanto caminho relativo ("/chat/123", o formato atual) quanto URL
+  // absoluta de payloads antigos, resolvendo sempre contra o origin do SW.
+  const url = new URL(
+    event.notification.data?.url || "/chat",
+    self.location.origin
+  ).href;
   event.waitUntil(
     clients
       .matchAll({ type: "window", includeUncontrolled: true })

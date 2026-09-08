@@ -119,6 +119,12 @@ export function EmployeeDetailModal({
           .from("tasks")
           .select("id, title, status, priority, due_date, project_id")
           .eq("assignee_id", employee.id)
+          // Subtarefa nao e item de lista: ela pertence a tarefa-mae e e
+          // exibida dentro dela (TaskDetailModal). Sem este filtro, uma tarefa
+          // vinda de reuniao com 3 subtarefas aparecia aqui como 4 itens de
+          // titulo parecido — que e o "tarefa duplicada" relatado. O Kanban
+          // (useTasks) sempre filtrou; estas duas telas e que escaparam.
+          .is("parent_task_id", null)
           .order("due_date", { ascending: true, nullsFirst: false })
           .limit(20);
 

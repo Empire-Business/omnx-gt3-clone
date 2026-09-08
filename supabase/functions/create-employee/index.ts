@@ -30,8 +30,11 @@ function buildInviteEmailHtml(opts: {
   link: string;
   tenantName: string;
   brandColor: string;
+  siteUrl: string;
+  email: string;
+  tempPassword: string;
 }): string {
-  const { recipientName, link, tenantName, brandColor } = opts;
+  const { recipientName, link, tenantName, brandColor, siteUrl, email, tempPassword } = opts;
   const firstName = recipientName.trim().split(/\s+/)[0] || recipientName;
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -45,9 +48,22 @@ function buildInviteEmailHtml(opts: {
         <tr><td style="padding:24px;">
           <p style="margin:0 0 12px;font-size:18px;font-weight:700;color:#18181b;">Olá, ${escapeHtml(firstName)}!</p>
           <p style="margin:0 0 8px;font-size:14px;color:#3f3f46;line-height:1.5;">Você foi convidado para acessar a plataforma <strong>${escapeHtml(tenantName)}</strong>.</p>
-          <p style="margin:0 0 20px;font-size:14px;color:#3f3f46;line-height:1.5;">Clique no botão abaixo para definir sua senha e entrar pela primeira vez.</p>
-          <a href="${link}" style="display:inline-block;background:${brandColor};color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 24px;border-radius:8px;">Definir minha senha</a>
-          <p style="margin:20px 0 0;font-size:12px;color:#a1a1aa;line-height:1.5;">Se o botão não funcionar, copie e cole este link no navegador:<br><span style="color:#71717a;word-break:break-all;">${link}</span></p>
+          <p style="margin:0 0 16px;font-size:14px;color:#3f3f46;line-height:1.5;">Use os dados abaixo para entrar pela primeira vez:</p>
+
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafafa;border:1px solid #e4e4e7;border-radius:8px;margin:0 0 16px;">
+            <tr><td style="padding:14px 16px;">
+              <p style="margin:0 0 4px;font-size:11px;color:#a1a1aa;text-transform:uppercase;letter-spacing:.04em;">Endereço da plataforma</p>
+              <p style="margin:0 0 12px;font-size:14px;"><a href="${siteUrl}" style="color:${brandColor};text-decoration:none;font-weight:600;">${escapeHtml(siteUrl)}</a></p>
+              <p style="margin:0 0 4px;font-size:11px;color:#a1a1aa;text-transform:uppercase;letter-spacing:.04em;">Seu e-mail</p>
+              <p style="margin:0 0 12px;font-size:14px;color:#18181b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(email)}</p>
+              <p style="margin:0 0 4px;font-size:11px;color:#a1a1aa;text-transform:uppercase;letter-spacing:.04em;">Senha temporária</p>
+              <p style="margin:0;font-size:18px;font-weight:700;color:#18181b;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.02em;">${escapeHtml(tempPassword)}</p>
+            </td></tr>
+          </table>
+
+          <p style="margin:0 0 16px;font-size:14px;color:#3f3f46;line-height:1.5;">Assim que entrar, <strong>troque essa senha</strong> em Configurações — ela é provisória e serve só para o primeiro acesso.</p>
+          <a href="${siteUrl}" style="display:inline-block;background:${brandColor};color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 24px;border-radius:8px;">Acessar a plataforma</a>
+          <p style="margin:20px 0 0;font-size:13px;color:#3f3f46;line-height:1.5;">Prefere já definir a sua própria senha? <a href="${link}" style="color:${brandColor};font-weight:600;">Clique aqui para criar uma senha nova</a> (este link vale por 1 hora).</p>
         </td></tr>
         <tr><td style="padding:16px 24px;border-top:1px solid #e4e4e7;">
           <p style="margin:0;font-size:11px;color:#a1a1aa;">Este convite é pessoal. Se você não esperava por ele, ignore este email.</p>
@@ -65,6 +81,8 @@ async function sendResendEmail(opts: {
   to: string;
   subject: string;
   html: string;
+  /** Alternativa em texto puro — email só-HTML pontua como spam. */
+  text: string;
 }): Promise<boolean> {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -77,6 +95,7 @@ async function sendResendEmail(opts: {
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,
+      text: opts.text,
     }),
   });
   if (!res.ok) {
@@ -88,14 +107,17 @@ async function sendResendEmail(opts: {
 }
 
 /**
- * Gera um link de definição de senha (recovery) e envia por email via Resend,
- * com branding do tenant. Retorna true se o email foi enviado. Em qualquer
- * falha (envs ausentes, geração de link ou envio) retorna false — o chamador
- * cai no fallback de senha temporária para não travar o acesso do colaborador.
+ * Envia o email de acesso via Resend, com branding do tenant. O email traz
+ * SEMPRE a senha temporária + o endereço da plataforma + o aviso de trocar a
+ * senha ao entrar, e ainda um link de recovery para quem preferir definir a
+ * própria senha na hora. Retorna true se o email foi enviado.
+ *
+ * O acesso nunca depende deste envio: a senha temporária também é devolvida ao
+ * admin na resposta, então uma falha de email não trava o colaborador.
  */
 async function dispatchInvite(
   serviceClient: ReturnType<typeof createClient>,
-  opts: { email: string; fullName: string; tenantId: string },
+  opts: { email: string; fullName: string; tenantId: string; tempPassword: string },
 ): Promise<boolean> {
   const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
   const from = Deno.env.get("EMAIL_FROM") ?? "";
@@ -128,7 +150,29 @@ async function dispatchInvite(
     link: linkData.properties.action_link,
     tenantName,
     brandColor,
+    siteUrl,
+    email: opts.email,
+    tempPassword: opts.tempPassword,
   });
+
+  const text = [
+    `Olá, ${opts.fullName}!`,
+    ``,
+    `Sua conta no ${tenantName} está pronta.`,
+    ``,
+    `Endereço: ${siteUrl}`,
+    `Email: ${opts.email}`,
+    `Senha temporária: ${opts.tempPassword}`,
+    ``,
+    `Assim que entrar, troque essa senha em Configurações — ela é provisória e`,
+    `serve só para o primeiro acesso.`,
+    ``,
+    `Prefere já definir a sua própria senha? Use este link (vale por 1 hora):`,
+    `${linkData.properties.action_link}`,
+    ``,
+    `---`,
+    `Este convite é pessoal. Se você não esperava por ele, ignore este email.`,
+  ].join("\n");
 
   return await sendResendEmail({
     apiKey,
@@ -136,6 +180,7 @@ async function dispatchInvite(
     to: opts.email,
     subject: `Seu acesso ao ${tenantName}`,
     html,
+    text,
   });
 }
 
@@ -214,9 +259,11 @@ Deno.serve(async (req) => {
       is_ceo?: boolean;
       send_invite?: boolean;
     };
-    // Por padrão envia convite por email. O admin pode optar por senha temporária
-    // manual passando send_invite === false (ou uma senha explícita).
-    const wantsInvite = send_invite !== false && !password;
+    // O acesso é SEMPRE duplo: senha temporária devolvida ao admin na resposta
+    // + email para o colaborador com essa mesma senha, o endereço da plataforma
+    // e o aviso de trocá-la ao entrar. `send_invite: false` só suprime o email
+    // (quando o admin quer repassar a senha por outro canal).
+    const wantsInvite = send_invite !== false;
     console.log("[create-employee] Request body parsed:", { full_name, email, position_id, role, is_ceo });
 
     // NOTE: manager_id is deprecated. The org chart hierarchy is now based on
@@ -392,13 +439,13 @@ Deno.serve(async (req) => {
           password: newTempPassword,
         });
 
-        // Envia convite por email para o colaborador definir a própria senha
-        // (a menos que o admin tenha optado por senha temporária manual)
+        // Envia o email de acesso com a senha temporária + link da plataforma
         const inviteSent = wantsInvite
           ? await dispatchInvite(serviceClient, {
               email: email.trim(),
               fullName: full_name.trim(),
               tenantId,
+              tempPassword: newTempPassword,
             })
           : false;
 
@@ -408,7 +455,7 @@ Deno.serve(async (req) => {
           employee_id: linkedEmployee.id,
           user_id: existingUserId,
           invite_sent: inviteSent,
-          temp_password: inviteSent ? undefined : newTempPassword,
+          temp_password: newTempPassword,
         });
       }
 
@@ -494,14 +541,14 @@ Deno.serve(async (req) => {
       if (posErr) console.log("[create-employee] Error setting position:", posErr.message);
     }
 
-    // 6. Envia convite por email para o colaborador definir a própria senha.
-    // Se o admin optou por senha manual (send_invite=false) ou passou uma senha
-    // explícita, respeita o fluxo antigo (sem convite).
+    // 6. Envia o email de acesso com a senha temporária + endereço da plataforma
+    // + aviso de trocar a senha. `send_invite: false` suprime só o email.
     const inviteSent = wantsInvite
       ? await dispatchInvite(serviceClient, {
           email: email.trim(),
           fullName: full_name.trim(),
           tenantId,
+          tempPassword,
         })
       : false;
 
@@ -511,7 +558,7 @@ Deno.serve(async (req) => {
       employee_id: employee.id,
       user_id: newUserId,
       invite_sent: inviteSent,
-      temp_password: password || inviteSent ? undefined : tempPassword,
+      temp_password: tempPassword,
     });
   } catch (err: unknown) {
     console.log("[create-employee] Unhandled error:", (err as Error).message);

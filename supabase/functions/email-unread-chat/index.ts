@@ -85,12 +85,45 @@ function buildEmailHtml(opts: {
 </html>`;
 }
 
+/**
+ * Versão texto do email. Mensagem só-HTML é um dos sinais de spam mais
+ * clássicos (`MIME_HTML_ONLY` no SpamAssassin) — todo email deve ir como
+ * multipart com alternativa em texto puro.
+ */
+function buildEmailText(opts: {
+  context: string;
+  senderName: string;
+  preview: string;
+  unreadCount: number;
+  link: string;
+  tenantName: string;
+}): string {
+  const { context, senderName, preview, unreadCount, link, tenantName } = opts;
+  const countLabel = unreadCount > 1 ? `${unreadCount} novas mensagens` : "1 nova mensagem";
+  return [
+    `${context}`,
+    `${countLabel}`,
+    ``,
+    `${senderName}: ${preview}`,
+    ``,
+    `Abrir conversa: ${link}`,
+    ``,
+    `---`,
+    `Você recebeu este email porque tem mensagens não lidas no chat do ${tenantName}.`,
+    `Para não receber mais estes avisos, ajuste suas notificações em ${link.split("/chat")[0]}/configuracoes`,
+  ].join("\n");
+}
+
 async function sendResendEmail(opts: {
   apiKey: string;
   from: string;
   to: string;
   subject: string;
   html: string;
+  text: string;
+  /** URL de preferências — vira List-Unsubscribe (exigido pelo Gmail em envios recorrentes). */
+  unsubscribeUrl: string;
+  replyTo?: string;
 }): Promise<boolean> {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -103,6 +136,17 @@ async function sendResendEmail(opts: {
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,
+      // Alternativa em texto puro — sem ela o email é só-HTML e pontua como spam.
+      text: opts.text,
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
+      // Gmail/Yahoo exigem List-Unsubscribe de quem envia em volume desde
+      // fev/2024, e este email é recorrente e automático. Sem o cabeçalho, o
+      // filtro fica bem mais agressivo — é o fator isolado mais provável de
+      // este digest específico cair em spam.
+      headers: {
+        "List-Unsubscribe": `<${opts.unsubscribeUrl}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
     }),
   });
   if (!res.ok) {
@@ -196,7 +240,26 @@ Deno.serve(async (req) => {
         brandColor: tenant.color,
       });
 
-      const ok = await sendResendEmail({ apiKey, from, to: email, subject, html });
+      const text = buildEmailText({
+        context,
+        senderName,
+        preview,
+        unreadCount: r.unread_count,
+        link,
+        tenantName: tenant.name,
+      });
+
+      const ok = await sendResendEmail({
+        apiKey,
+        from,
+        to: email,
+        subject,
+        html,
+        text,
+        // A aba "Notificações" das configurações é onde a pessoa desliga estes
+        // avisos — serve de destino do List-Unsubscribe.
+        unsubscribeUrl: `${siteUrl}/configuracoes`,
+      });
       if (!ok) continue;
 
       // Registra envio (dedupe)

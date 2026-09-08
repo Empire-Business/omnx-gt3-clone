@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
+import { toast } from "sonner";
 
 // ─── useIntegrations ────────────────────────────────────────────────────────
 // Central de Integrações: decide o que fica VISÍVEL no clone com base na chave
@@ -68,21 +69,35 @@ export function useIntegrations(opts?: { probe?: boolean }) {
   });
 
   // Override manual do admin (desligar feature disponível).
+  //
+  // Fail-open igual à `statusQuery` acima: se a tabela não existir no clone
+  // (migration `tenant_features` ainda não aplicada → PostgREST devolve 404) ou
+  // a leitura falhar, tratamos como "nenhum override" e mostramos tudo. Antes
+  // isso era `throw`, o que só rendia 404 repetidos no console (com retry) sem
+  // mudar o resultado — o gate já era fail-open no `getFeature`.
   const overridesQuery = useQuery({
     queryKey: ["tenant-features", tenantId],
     staleTime: 1000 * 60 * 10,
-    queryFn: async () => {
+    retry: false,
+    queryFn: async (): Promise<{ rows: TenantFeatureRow[]; unavailable: boolean }> => {
       const { data, error } = await (supabase as any)
         .from("tenant_features")
-        .select("feature_key, manually_disabled");
-      if (error) throw error;
-      return (data ?? []) as TenantFeatureRow[];
+        .select("feature_key, manually_disabled")
+        // Isolamento multi-tenant: RLS é a 1ª linha, o filtro explícito é a 2ª.
+        .eq("tenant_id", tenantId);
+      if (error) {
+        console.warn("[useIntegrations] tenant_features indisponível (fail-open):", error.message);
+        return { rows: [], unavailable: true };
+      }
+      return { rows: (data ?? []) as TenantFeatureRow[], unavailable: false };
     },
     enabled: !!tenantId,
   });
 
   const status = statusQuery.data ?? null;
-  const overrides = overridesQuery.data ?? [];
+  const overrides = overridesQuery.data?.rows ?? [];
+  /** true quando a tabela de overrides não pôde ser lida (ex.: migration ausente). */
+  const overridesUnavailable = overridesQuery.data?.unavailable ?? false;
   const disabledSet = new Set(
     overrides.filter((o) => o.manually_disabled).map((o) => o.feature_key)
   );
@@ -121,6 +136,9 @@ export function useIntegrations(opts?: { probe?: boolean }) {
       if (error) throw error;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tenant-features", tenantId] }),
+    // Sem isto a escrita falhava calada e o switch voltava sozinho sem explicação.
+    onError: (err: any) =>
+      toast.error(err?.message || "Não foi possível salvar o ajuste da integração."),
   });
 
   return {
@@ -131,6 +149,12 @@ export function useIntegrations(opts?: { probe?: boolean }) {
     loading: statusQuery.isLoading || overridesQuery.isLoading,
     probed: status?.probed ?? false,
     isError: overridesQuery.isError,
+    /**
+     * A leitura dos overrides falhou (tabela `tenant_features` ausente no clone,
+     * RLS, rede). O gate segue fail-open — mas o admin precisa saber que o
+     * botão de desligar feature não vai persistir.
+     */
+    overridesUnavailable,
     refetch: () => {
       statusQuery.refetch();
       overridesQuery.refetch();

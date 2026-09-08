@@ -1,7 +1,10 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useNotificationMutes } from "@/hooks/useNotifications";
+import { playNotificationSound } from "@/lib/notification-sound";
 
 export type ChatChannel = {
   id: string;
@@ -14,6 +17,17 @@ export type ChatChannel = {
   created_by: string;
   created_at: string;
   member_count?: number;
+  /*
+    Campos derivados, preenchidos em memória para DMs (ver o laço logo abaixo,
+    que resolve o "outro" participante). Não existem como coluna em
+    `chat_channels` — por isso são opcionais. Declará-los aqui é o que evita o
+    `(channel as any).display_name` que se espalhou pela página de chat: o dado
+    sempre existiu, só não estava no tipo.
+  */
+  display_name?: string;
+  display_avatar?: string | null;
+  other_user_id?: string;
+  other_birth_date?: string | null;
 };
 
 export type ChatMessage = {
@@ -105,10 +119,10 @@ export function useChatChannels() {
           if (c.is_dm) {
             const other = dmOtherMap.get(c.id) as any;
             if (other) {
-              (c as any).display_name = other.full_name;
-              (c as any).display_avatar = other.avatar_url;
-              (c as any).other_user_id = other.user_id;
-              (c as any).other_birth_date = birthMap.get(other.user_id) ?? null;
+              c.display_name = other.full_name;
+              c.display_avatar = other.avatar_url;
+              c.other_user_id = other.user_id;
+              c.other_birth_date = birthMap.get(other.user_id) ?? null;
             }
           }
         }
@@ -188,39 +202,57 @@ export function useChatMessages(channelId: string | undefined) {
   const query = useQuery({
     queryKey,
     enabled: !!channelId,
-    // Fallback de atualização: mesmo que o Realtime do Supabase falhe em
-    // produção (publication/RLS), o canal aberto se atualiza sozinho a cada
-    // 5s sem precisar de F5. Quando o Realtime funciona, a invalidação abaixo
-    // entrega a mensagem instantaneamente; o polling só cobre a lacuna.
-    refetchInterval: 5_000,
+    // Fallback de atualização caso o Realtime falhe em produção
+    // (publication/RLS). Quando o Realtime funciona — o caminho normal — a
+    // invalidação abaixo já entrega a mensagem instantaneamente, então este
+    // polling é só rede de segurança.
+    //
+    // Era 5s: refazia a busca das 50 últimas mensagens (com joins) 12x por
+    // minuto no celular, com a tela de conversa aberta. 20s cobre a mesma
+    // lacuna com 1/4 do tráfego; `refetchOnWindowFocus`/`onReconnect` abaixo
+    // garantem atualização imediata ao voltar para o app.
+    refetchInterval: 20_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     queryFn: async () => {
       if (!channelId) return { items: [] as ChatMessage[], hasMore: false };
-      // Pega as N mais recentes (DESC), depois reverte para ordem cronológica
-      const { data: msgs, error } = await supabase
-        .from("chat_messages" as any)
-        .select("*")
-        .eq("channel_id", channelId)
-        .order("created_at", { ascending: false })
-        .limit(limit + 1); // pega 1 a mais para detectar hasMore
-      if (error) throw error;
-      const raw = (msgs || []) as ChatMessage[];
-      const hasMore = raw.length > limit;
-      const sliced = hasMore ? raw.slice(0, limit) : raw;
-      const list = sliced.reverse(); // ordem cronológica (antiga → nova)
-      const authorIds = [...new Set(list.map((m) => m.author_id))];
-      if (authorIds.length === 0) return { items: list, hasMore };
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("user_id, full_name, avatar_url")
-        .in("user_id", authorIds);
-      const map = new Map((profiles || []).map((p: any) => [p.user_id, p]));
-      const items = list.map((m) => {
-        const p = map.get(m.author_id) as any;
-        return { ...m, author_name: p?.full_name ?? null, author_avatar: p?.avatar_url ?? null };
-      });
-      return { items, hasMore };
+      // Teto de tempo para a requisição. Quando o celular volta do background,
+      // um fetch iniciado com a rede suspensa pode ficar PENDURADO para sempre:
+      // a query nunca resolve nem falha, a tela fica presa e a única saída é
+      // recarregar a página na mão. Com o abort, ela vira erro em 15s — aí o
+      // polling de 20s e o botão "Tentar de novo" dão conta sozinhos.
+      const ac = new AbortController();
+      const timeout = setTimeout(() => ac.abort(), 15_000);
+      try {
+        // Pega as N mais recentes (DESC), depois reverte para ordem cronológica
+        const { data: msgs, error } = await supabase
+          .from("chat_messages" as any)
+          .select("*")
+          .eq("channel_id", channelId)
+          .order("created_at", { ascending: false })
+          .limit(limit + 1) // pega 1 a mais para detectar hasMore
+          .abortSignal(ac.signal);
+        if (error) throw error;
+        const raw = (msgs || []) as ChatMessage[];
+        const hasMore = raw.length > limit;
+        const sliced = hasMore ? raw.slice(0, limit) : raw;
+        const list = sliced.reverse(); // ordem cronológica (antiga → nova)
+        const authorIds = [...new Set(list.map((m) => m.author_id))];
+        if (authorIds.length === 0) return { items: list, hasMore };
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, full_name, avatar_url")
+          .in("user_id", authorIds)
+          .abortSignal(ac.signal);
+        const map = new Map((profiles || []).map((p: any) => [p.user_id, p]));
+        const items = list.map((m) => {
+          const p = map.get(m.author_id) as any;
+          return { ...m, author_name: p?.full_name ?? null, author_avatar: p?.avatar_url ?? null };
+        });
+        return { items, hasMore };
+      } finally {
+        clearTimeout(timeout);
+      }
     },
   });
 
@@ -595,19 +627,15 @@ export function useChatUnread() {
     refetchInterval: 20_000,
     queryFn: async () => {
       if (!profile?.user_id) return new Map<string, number>();
-      const { data: memberships } = await supabase
-        .from("chat_channel_members" as any)
-        .select("channel_id, last_read_at")
-        .eq("user_id", profile.user_id);
+      // UMA chamada agregada no banco. Antes isto era um loop com uma
+      // requisição HTTP POR CANAL: quem é membro de 28 canais disparava 28
+      // requisições sequenciais a cada 20s, em toda página — a causa nº 1 de
+      // o app travar o celular. Ver migration 20260811150000_chat_unread_rpc.
+      const { data, error } = await supabase.rpc("get_chat_unread_counts" as any);
+      if (error) throw error;
       const map = new Map<string, number>();
-      for (const m of (memberships || []) as any[]) {
-        const { count } = await supabase
-          .from("chat_messages" as any)
-          .select("id", { count: "exact", head: true })
-          .eq("channel_id", m.channel_id)
-          .neq("author_id", profile.user_id)
-          .gt("created_at", m.last_read_at || "1970-01-01");
-        map.set(m.channel_id, count || 0);
+      for (const row of (data as any[]) || []) {
+        map.set(row.channel_id, Number(row.unread_count) || 0);
       }
       return map;
     },
@@ -646,18 +674,22 @@ export function useChatLastMessages(channelIds: string[]) {
     queryFn: async () => {
       const map = new Map<string, { content: string; created_at: string; author_id: string; author_name: string | null }>();
       const authorIds = new Set<string>();
-      for (const id of channelIds) {
-        const { data } = await supabase
-          .from("chat_messages" as any)
-          .select("content, created_at, author_id")
-          .eq("channel_id", id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (data) {
-          map.set(id, { ...(data as any), author_name: null });
-          authorIds.add((data as any).author_id);
-        }
+      // UMA chamada (DISTINCT ON no banco) em vez de uma requisição por canal.
+      // Mesmo motivo do get_chat_unread_counts: com 28 canais eram 28 idas ao
+      // servidor a cada 30s. A RPC só devolve canais dos quais o usuário é
+      // membro, então ids alheios no array simplesmente não retornam nada.
+      const { data, error } = await supabase.rpc("get_chat_last_messages" as any, {
+        p_channel_ids: channelIds,
+      });
+      if (error) throw error;
+      for (const row of (data as any[]) || []) {
+        map.set(row.channel_id, {
+          content: row.content,
+          created_at: row.created_at,
+          author_id: row.author_id,
+          author_name: null,
+        });
+        authorIds.add(row.author_id);
       }
       // Hidrata nomes
       if (authorIds.size > 0) {
@@ -825,14 +857,12 @@ export async function uploadChatAttachment(channelId: string, file: File): Promi
 }
 
 // Preferência de som de notificação (por dispositivo, via localStorage).
-// Regra do produto: TODOS começam com o som ligado — só "0" desliga.
-const CHAT_SOUND_KEY = "chat-sound-enabled";
-export function isChatSoundEnabled(): boolean {
-  try { return localStorage.getItem(CHAT_SOUND_KEY) !== "0"; } catch { return true; }
-}
-export function setChatSoundEnabled(on: boolean): void {
-  try { localStorage.setItem(CHAT_SOUND_KEY, on ? "1" : "0"); } catch { /* ignore */ }
-}
+// A implementação vive em `@/lib/notification-sound` (ponto único de Web Audio);
+// estes re-exports mantêm os imports existentes funcionando.
+export {
+  isNotificationSoundEnabled as isChatSoundEnabled,
+  setNotificationSoundEnabled as setChatSoundEnabled,
+} from "@/lib/notification-sound";
 
 // Verdadeiro quando a data de nascimento (YYYY-MM-DD) cai HOJE (compara mês+dia,
 // ignora o ano). Usado no card do DM na sidebar pra mostrar "🎉 Aniversário hoje".
@@ -845,26 +875,6 @@ export function isBirthdayToday(birthDate: string | null | undefined): boolean {
 }
 
 // Notificações sonoras + toast de novas msgs em qualquer canal do usuário
-let _notifAudioCtx: AudioContext | null = null;
-function playNotifSound() {
-  if (!isChatSoundEnabled()) return;
-  try {
-    if (!_notifAudioCtx) _notifAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const ctx = _notifAudioCtx!;
-    const now = ctx.currentTime;
-    const o1 = ctx.createOscillator();
-    const g1 = ctx.createGain();
-    o1.frequency.setValueAtTime(880, now);
-    o1.frequency.exponentialRampToValueAtTime(660, now + 0.18);
-    g1.gain.setValueAtTime(0.0001, now);
-    g1.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
-    g1.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
-    o1.connect(g1).connect(ctx.destination);
-    o1.start(now);
-    o1.stop(now + 0.35);
-  } catch { /* silencioso */ }
-}
-
 export function useChatNotifications(
   activeChannelId: string | null | undefined,
   mutedSet?: Set<string>,
@@ -874,6 +884,10 @@ export function useChatNotifications(
   // Ref para ler o conjunto de canais silenciados sem re-subscrever o realtime a cada refetch
   const mutedRef = useRef<Set<string> | undefined>(mutedSet);
   mutedRef.current = mutedSet;
+  // Mute global de mensagens (sininho → "Silenciar mensagens"/"Tudo")
+  const { isMuted: isKindMuted } = useNotificationMutes();
+  const kindMutedRef = useRef(isKindMuted);
+  kindMutedRef.current = isKindMuted;
   useEffect(() => {
     if (!profile?.user_id || !profile.tenant_id) return;
     const ch = supabase
@@ -892,11 +906,13 @@ export function useChatNotifications(
             .eq("channel_id", m.channel_id)
             .maybeSingle();
           if (!mem) return;
-          // Não toca som se o canal está silenciado
+          // Não toca som se o canal está silenciado (ou se o usuário
+          // silenciou as notificações de mensagem por completo)
           if (mutedRef.current?.has(m.channel_id)) return;
+          if (kindMutedRef.current("chat")) return;
           // Toca som somente se o canal não está aberto
           if (m.channel_id !== activeChannelId) {
-            playNotifSound();
+            void playNotificationSound("chat");
             qc.invalidateQueries({ queryKey: ["chat_unread"] });
           }
         }
@@ -1026,6 +1042,25 @@ export function useMutedChannels() {
   return { ...query, toggleMute };
 }
 
+/**
+ * Total de mensagens não lidas do chat DESCONTANDO conversas silenciadas.
+ * Fonte única para os badges globais (sidebar, bottom nav, título da aba) —
+ * antes cada um somava o mapa cru e o contador continuava subindo mesmo com
+ * o canal silenciado, dando a impressão de que o mute não funcionava.
+ */
+export function useChatUnreadTotal() {
+  const { data: unreadMap } = useChatUnread();
+  const { data: mutedSet } = useMutedChannels();
+  return useMemo(() => {
+    if (!unreadMap) return 0;
+    let sum = 0;
+    unreadMap.forEach((count, channelId) => {
+      if (!mutedSet?.has(channelId)) sum += count;
+    });
+    return sum;
+  }, [unreadMap, mutedSet]);
+}
+
 // ─── Starred messages ───
 export function useStarredMessages() {
   const qc = useQueryClient();
@@ -1061,11 +1096,56 @@ export function useStarredMessages() {
 export type TypingAction = "typing" | "uploading_image" | "uploading_video" | "uploading_audio" | "uploading_file" | "recording_audio";
 export interface TypingState { name: string; action: TypingAction }
 
+/**
+ * Espelha o broadcast de digitação num canal por TENANT, alem do canal da
+ * conversa. A sidebar precisa saber quem esta digitando em QUALQUER conversa
+ * para marcar o card — e assinar um canal realtime por conversa aberta na lista
+ * nao escala. Um canal so, com channel_id no payload, resolve.
+ */
+export function useTenantTyping(tenantId: string | undefined) {
+  const { profile } = useAuth();
+  const [byChannel, setByChannel] = useState<Map<string, TypingState>>(new Map());
+
+  useEffect(() => {
+    if (!tenantId) return;
+    const ch = supabase.channel(`typing-tenant-${tenantId}`, { config: { broadcast: { self: false } } });
+    ch.on("broadcast", { event: "typing" }, (payload: any) => {
+      const { user_id, full_name, action, channel_id } = payload.payload || {};
+      if (!user_id || !channel_id || user_id === profile?.user_id) return;
+      const state: TypingState = { name: full_name || "Alguém", action: (action as TypingAction) || "typing" };
+      setByChannel((prev) => new Map(prev).set(channel_id, state));
+      // Mesma janela de 3s do indicador da conversa: sem novo broadcast, some.
+      setTimeout(() => {
+        setByChannel((prev) => {
+          const next = new Map(prev);
+          if (next.get(channel_id)?.action === state.action) next.delete(channel_id);
+          return next;
+        });
+      }, 3000);
+    });
+    ch.subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [tenantId, profile?.user_id]);
+
+  return byChannel;
+}
+
 export function useTypingIndicator(channelId: string | undefined) {
   const { profile } = useAuth();
   const [typers, setTypers] = useState<Map<string, TypingState>>(new Map());
   const channelRef = useRef<any>(null);
+  const tenantChannelRef = useRef<any>(null);
   const lastBroadcast = useRef<Record<string, number>>({});
+  const tenantId = profile?.tenant_id;
+
+  // Só para PUBLICAR: quem escuta é o useTenantTyping, na sidebar.
+  useEffect(() => {
+    if (!tenantId) return;
+    const ch = supabase.channel(`typing-tenant-${tenantId}`, { config: { broadcast: { self: false } } });
+    ch.subscribe();
+    tenantChannelRef.current = ch;
+    return () => { supabase.removeChannel(ch); tenantChannelRef.current = null; };
+  }, [tenantId]);
 
   useEffect(() => {
     if (!channelId) return;
@@ -1099,10 +1179,14 @@ export function useTypingIndicator(channelId: string | undefined) {
     const last = lastBroadcast.current[action] || 0;
     if (now - last < 1500) return; // throttle por ação
     lastBroadcast.current[action] = now;
-    channelRef.current?.send({
+    const payload = { user_id: profile?.user_id, full_name: fullName, action };
+    channelRef.current?.send({ type: "broadcast", event: "typing", payload });
+    // Espelho no canal do tenant, para a sidebar marcar o card da conversa
+    // mesmo com ela fechada (ver useTenantTyping).
+    tenantChannelRef.current?.send({
       type: "broadcast",
       event: "typing",
-      payload: { user_id: profile?.user_id, full_name: fullName, action },
+      payload: { ...payload, channel_id: channelId },
     });
   };
 

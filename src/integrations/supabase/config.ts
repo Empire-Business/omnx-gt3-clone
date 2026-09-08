@@ -14,6 +14,23 @@ const FALLBACK_SUPABASE_PROJECT_ID = "opbdoulspzlabxzevffc";
 const FALLBACK_SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9wYmRvdWxzcHpsYWJ4emV2ZmZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2MzEyNDgsImV4cCI6MjA4NzIwNzI0OH0.MTa39BraEgvkq0O2eKK9cnumxkAW-Vm5nwBkREMNurY";
 
+// Chave VAPID PÚBLICA do Web Push. Mesma natureza da anon key: é entregue ao
+// navegador de qualquer forma (vai como `applicationServerKey` na inscrição) e
+// serve só para o serviço de push identificar o remetente. A chave PRIVADA
+// continua exclusivamente nos Secrets das Edge Functions.
+//
+// Sem este fallback, o build do Lovable saía com VITE_VAPID_PUBLIC_KEY undefined,
+// o que tornava `isSupported` constante `false` em usePushNotifications — o
+// minificador então eliminava todo o código de inscrição como código morto e
+// TODOS os usuários, em qualquer navegador, viam "este navegador não suporta
+// notificações push". Confirmado no bundle publicado: 0 ocorrências da chave,
+// de `applicationServerKey` e de `push_subscriptions`.
+// IMPORTANTE: precisa ser o PAR da VAPID_PRIVATE_KEY configurada nos Secrets
+// das Edge Functions. Se a privada for rotacionada, atualize aqui também —
+// senão o serviço de push rejeita todos os envios.
+const FALLBACK_VAPID_PUBLIC_KEY =
+  "BMd1od1G6uJKpGeYjrxkz2gxr9kDaqzv-2CnPEXGjm_8nWx9fiVt3RBY6yFb-ye5KE0DBnG_tR2yamRH9zOEDfQ";
+
 const DEFAULT_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || FALLBACK_SUPABASE_URL;
 const DEFAULT_STORAGE_KEY_PREFIX =
   import.meta.env.VITE_SUPABASE_PROJECT_ID || FALLBACK_SUPABASE_PROJECT_ID;
@@ -60,6 +77,11 @@ export function getDirectSupabaseUrl() {
 // Anon/publishable key (pública). Prioriza a env var; cai no fallback no build do Lovable.
 export function getSupabaseAnonKey() {
   return import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || FALLBACK_SUPABASE_ANON_KEY;
+}
+
+// Chave VAPID pública (Web Push). Prioriza a env var; cai no fallback no Lovable.
+export function getVapidPublicKey(): string {
+  return import.meta.env.VITE_VAPID_PUBLIC_KEY || FALLBACK_VAPID_PUBLIC_KEY;
 }
 
 export function getSupabaseStorageKey() {

@@ -51,14 +51,27 @@ export interface MeetPreJoinChoices {
 
 interface Props {
   defaultName: string;
+  /**
+   * Nome já conhecido pelo sistema (perfil do colaborador autenticado). Quando
+   * verdadeiro, a tela CONFIRMA a identidade em vez de pedir que a pessoa
+   * digite o próprio nome — quem entra pelo GT3 logado já foi identificado, e o
+   * campo aberto só criava trabalho e divergência de grafia na lista de
+   * participantes. Continua editável por um clique em "usar outro nome".
+   *
+   * Para convidado externo (MeetGuest) fica `false`: aí o nome é a única
+   * identificação que existe.
+   */
+  identityKnown?: boolean;
   onSubmit: (choices: MeetPreJoinChoices) => void;
 }
 
-export function MeetPreJoin({ defaultName, onSubmit }: Props) {
+export function MeetPreJoin({ defaultName, identityKnown = false, onSubmit }: Props) {
   const { prefs, update } = useMeetPreferences();
 
   const [name, setName] = useState(prefs.displayName || defaultName);
   const [nameEdited, setNameEdited] = useState(false);
+  /** Só para `identityKnown`: abre o campo quando a pessoa pede outro nome. */
+  const [editingName, setEditingName] = useState(false);
 
   // Sincroniza o campo de nome quando profile/employees carregam DEPOIS do
   // primeiro render (evita o usuário entrar com fallback literal "Participante"
@@ -380,22 +393,44 @@ export function MeetPreJoin({ defaultName, onSubmit }: Props) {
             </p>
           </header>
 
-          <div className="space-y-2">
-            <Label htmlFor="prejoin-name" className="text-sm">
-              Seu nome
-            </Label>
-            <Input
-              id="prejoin-name"
-              value={name}
-              onChange={(e) => {
-                setNameEdited(true);
-                setName(e.target.value);
-              }}
-              placeholder="Como você quer aparecer na reunião"
-              autoComplete="name"
-              className="h-12 text-base"
-            />
-          </div>
+          {identityKnown && !editingName ? (
+            /* Colaborador logado: o sistema já sabe quem é — confirma, não pergunta. */
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/30 px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Entrando como</p>
+                <p className="text-base font-medium text-foreground truncate" title={name}>
+                  {name}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setEditingName(true)}
+              >
+                Usar outro nome
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="prejoin-name" className="text-sm">
+                Seu nome
+              </Label>
+              <Input
+                id="prejoin-name"
+                value={name}
+                autoFocus={editingName}
+                onChange={(e) => {
+                  setNameEdited(true);
+                  setName(e.target.value);
+                }}
+                placeholder="Como você quer aparecer na reunião"
+                autoComplete="name"
+                className="h-12 text-base"
+              />
+            </div>
+          )}
 
           <Button
             onClick={handleJoin}

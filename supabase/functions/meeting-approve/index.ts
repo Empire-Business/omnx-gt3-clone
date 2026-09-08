@@ -70,10 +70,85 @@ Deno.serve(async (req) => {
 
     const tenant_id = meeting.tenant_id;
     const createdItems: { type: string; id: string }[] = [];
+    const skippedItems: { type: string; title: string }[] = [];
+
+    /**
+     * Identidade de uma sugestao da IA. Ela nao tem id estavel, entao o que
+     * define "e o mesmo item" e (reuniao, tipo, titulo normalizado). Precisa
+     * casar exatamente com o backfill da migration 20260903140000.
+     */
+    const suggestionKey = (titulo: string | null | undefined) =>
+      (titulo ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+    /**
+     * RESERVA o item antes de cria-lo. Devolve false quando ele ja tinha sido
+     * aprovado nesta reuniao — ai o chamador pula.
+     *
+     * Por que reservar em vez de "consultar e depois inserir": duas execucoes
+     * simultaneas (retentativa do invoke, dois cliques em abas diferentes)
+     * passariam juntas por uma consulta previa e criariam as duas tarefas. O
+     * INSERT com ON CONFLICT DO NOTHING resolve no banco, contra o indice
+     * unico meeting_approved_items_dedupe_uq. Mesmo padrao do
+     * notify-upcoming-events.
+     */
+    async function reservarItem(
+      item_type: "task" | "project",
+      titulo: string | null | undefined,
+      original_suggestion: unknown,
+    ): Promise<string | null> {
+      const { data, error } = await serviceClient
+        .from("meeting_approved_items")
+        .upsert(
+          {
+            meeting_id,
+            tenant_id,
+            item_type,
+            suggestion_key: suggestionKey(titulo),
+            item_id: null,
+            original_suggestion,
+          },
+          { onConflict: "meeting_id,item_type,suggestion_key", ignoreDuplicates: true },
+        )
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        console.error(`[meeting-approve] falha ao reservar ${item_type} "${titulo}":`, error.message);
+        return null;
+      }
+      // Sem linha de volta = ON CONFLICT DO NOTHING = ja estava aprovado.
+      return data?.id ?? null;
+    }
+
+    /** Liga a reserva ao registro real, ou desfaz se a criacao falhou. */
+    async function concluirReserva(reservaId: string, itemId: string | null) {
+      if (itemId) {
+        await serviceClient
+          .from("meeting_approved_items")
+          .update({ item_id: itemId })
+          .eq("id", reservaId);
+      } else {
+        // Sem isso, um erro na criacao deixaria a reserva travando a proxima
+        // tentativa legitima de aprovar aquele item.
+        const { error } = await serviceClient
+          .from("meeting_approved_items")
+          .delete()
+          .eq("id", reservaId);
+        if (error) {
+          console.error("[meeting-approve] ROLLBACK DA RESERVA FALHOU:", error.message);
+        }
+      }
+    }
 
     // Create approved projects
     if (approved_projects?.length) {
       for (const proj of approved_projects) {
+        const reservaId = await reservarItem("project", proj.name, proj);
+        if (!reservaId) {
+          skippedItems.push({ type: "project", title: proj.name });
+          continue;
+        }
+
         const { data: created, error: projErr } = await serviceClient
           .from("projects")
           .insert({
@@ -89,24 +164,24 @@ Deno.serve(async (req) => {
 
         if (projErr) {
           console.error("Error creating project:", projErr);
+          await concluirReserva(reservaId, null);
           continue;
         }
 
         createdItems.push({ type: "project", id: created.id });
-
-        await serviceClient.from("meeting_approved_items").insert({
-          meeting_id,
-          tenant_id,
-          item_type: "project",
-          item_id: created.id,
-          original_suggestion: proj,
-        });
+        await concluirReserva(reservaId, created.id);
       }
     }
 
     // Create approved tasks
     if (approved_tasks?.length) {
       for (const task of approved_tasks) {
+        const reservaId = await reservarItem("task", task.title, task);
+        if (!reservaId) {
+          skippedItems.push({ type: "task", title: task.title });
+          continue;
+        }
+
         let projectId = task.project_id || null;
 
         // If project_name is provided but no project_id, look for existing project by name
@@ -143,6 +218,7 @@ Deno.serve(async (req) => {
 
         if (taskErr) {
           console.error("Error creating task:", taskErr);
+          await concluirReserva(reservaId, null);
           continue;
         }
 
@@ -202,14 +278,7 @@ Deno.serve(async (req) => {
         }
 
         createdItems.push({ type: "task", id: created.id });
-
-        await serviceClient.from("meeting_approved_items").insert({
-          meeting_id,
-          tenant_id,
-          item_type: "task",
-          item_id: created.id,
-          original_suggestion: task,
-        });
+        await concluirReserva(reservaId, created.id);
       }
     }
 
@@ -220,7 +289,14 @@ Deno.serve(async (req) => {
       approved_at: new Date().toISOString(),
     }).eq("id", meeting_id);
 
-    return new Response(JSON.stringify({ success: true, created_items: createdItems }), {
+    // `skipped_items` diz o que ja tinha sido aprovado antes. Sem isso, uma
+    // segunda aprovacao responderia "sucesso" com lista vazia e o usuario
+    // ficaria sem entender por que nada apareceu.
+    return new Response(JSON.stringify({
+      success: true,
+      created_items: createdItems,
+      skipped_items: skippedItems,
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

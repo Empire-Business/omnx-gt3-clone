@@ -197,18 +197,42 @@ export function useTasks(projectId?: string) {
   });
 
   const createTask = useMutation({
-    mutationFn: async (payload: Omit<TablesInsert<"tasks">, "tenant_id">) => {
+    // `assignee_ids` é opcional: quando informado, a tarefa nasce com múltiplos
+    // responsáveis (task_assignees). `assignee_id` continua sendo gravado com o
+    // primeiro da lista para manter compatibilidade com o campo legado.
+    mutationFn: async ({
+      assignee_ids,
+      ...payload
+    }: Omit<TablesInsert<"tasks">, "tenant_id"> & { assignee_ids?: string[] }) => {
       const labels = await resolveTaskLabels({
         project_id: payload.project_id,
         labels: payload.labels,
       });
 
+      const employeeIds = [
+        ...new Set([...(assignee_ids ?? []), payload.assignee_id].filter(Boolean) as string[]),
+      ];
+
       const { data, error } = await supabase
         .from("tasks")
-        .insert({ ...payload, tenant_id: tenantId!, created_by: user?.id ?? null, labels })
+        .insert({
+          ...payload,
+          assignee_id: employeeIds[0] ?? null,
+          tenant_id: tenantId!,
+          created_by: user?.id ?? null,
+          labels,
+        })
         .select()
         .single();
       if (error) throw error;
+
+      if (data?.id && employeeIds.length > 0) {
+        const { error: assigneeError } = await supabase.from("task_assignees").insert(
+          employeeIds.map((eid) => ({ task_id: data.id, employee_id: eid, tenant_id: tenantId! }))
+        );
+        if (assigneeError) throw assigneeError;
+      }
+
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", tenantId] }),

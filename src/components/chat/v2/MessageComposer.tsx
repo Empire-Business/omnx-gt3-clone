@@ -279,7 +279,7 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      className="relative px-5 pb-4 pt-1"
+      className="relative px-3 pb-3 pt-1 md:px-5 md:pb-4"
     >
       <AnimatePresence>
         {dragActive && (
@@ -317,10 +317,10 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
                 <button
                   type="button"
                   onClick={() => cancelScheduled(s.id)}
-                  className="h-5 w-5 rounded hover:bg-destructive/15 flex items-center justify-center cursor-pointer flex-shrink-0"
+                  className="h-9 w-9 md:h-5 md:w-5 rounded hover:bg-destructive/15 flex items-center justify-center cursor-pointer flex-shrink-0"
                   aria-label="Cancelar agendamento"
                 >
-                  <X className="h-3 w-3 text-muted-foreground hover:text-danger" />
+                  <X className="h-4 w-4 md:h-3 md:w-3 text-muted-foreground hover:text-danger" />
                 </button>
               </div>
             );
@@ -344,7 +344,7 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
             {attachments.map((a, i) => (
               <div
                 key={i}
-                className="relative group flex items-center gap-2 bg-muted rounded-md pl-2 pr-7 py-1.5 text-xs border border-border"
+                className="relative group flex items-center gap-2 bg-muted rounded-md pl-2 pr-9 md:pr-7 py-1.5 text-xs border border-border"
               >
                 {a.type === "image" ? (
                   <img src={a.url} alt={a.name} className="h-6 w-6 object-cover rounded" />
@@ -355,9 +355,9 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
                 <button
                   onClick={() => setAttachments((p) => p.filter((_, idx) => idx !== i))}
                   aria-label="Remover anexo"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full hover:bg-destructive/15 flex items-center justify-center cursor-pointer transition-colors duration-150"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 md:h-5 md:w-5 rounded-full hover:bg-destructive/15 flex items-center justify-center cursor-pointer transition-colors duration-150"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-4 w-4 md:h-3 md:w-3" />
                 </button>
               </div>
             ))}
@@ -380,32 +380,32 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
           placeholder="Mensagem…"
           rows={1}
           className={cn(
-            "min-h-[44px] max-h-40 resize-none py-3 px-3.5",
+            "min-h-[48px] md:min-h-[44px] max-h-40 resize-none py-3 px-3.5",
             "bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0",
-            "text-body-md leading-relaxed"
+            "text-base md:text-body-md leading-relaxed"
           )}
         />
 
         {/* Toolbar inferior */}
-        <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-border">
+        <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-t border-border">
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 cursor-pointer text-muted-foreground"
+            className="h-10 w-10 md:h-7 md:w-7 cursor-pointer text-muted-foreground"
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
             aria-label="Anexar arquivo"
           >
-            {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+            {uploading ? <Loader2 className="h-5 w-5 md:h-3.5 md:w-3.5 animate-spin" /> : <Paperclip className="h-5 w-5 md:h-3.5 md:w-3.5" />}
           </Button>
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 cursor-pointer text-muted-foreground"
+            className="h-10 w-10 md:h-7 md:w-7 cursor-pointer text-muted-foreground"
             onClick={() => fileRef.current?.click()}
             aria-label="Imagem"
           >
-            <ImageIcon className="h-3.5 w-3.5" />
+            <ImageIcon className="h-5 w-5 md:h-3.5 md:w-3.5" />
           </Button>
           <ChatEmojiPicker
             side="top"
@@ -415,10 +415,10 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-7 w-7 cursor-pointer text-muted-foreground"
+                className="h-10 w-10 md:h-7 md:w-7 cursor-pointer text-muted-foreground"
                 aria-label="Inserir emoji"
               >
-                <Smile className="h-3.5 w-3.5" />
+                <Smile className="h-5 w-5 md:h-3.5 md:w-3.5" />
               </Button>
             }
           />
@@ -426,18 +426,18 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
             size="icon"
             variant="ghost"
             className={cn(
-              "h-7 w-7 cursor-pointer transition-colors duration-150",
+              "h-10 w-10 md:h-7 md:w-7 cursor-pointer transition-colors duration-150",
               recorder.recording ? "text-danger bg-danger/10 hover:bg-danger/15" : "text-muted-foreground"
             )}
             onClick={recorder.recording ? handleStopVoice : handleStartVoice}
             aria-label={recorder.recording ? "Parar gravação e enviar" : "Gravar áudio"}
           >
-            <Mic className={cn("h-3.5 w-3.5", recorder.recording && "animate-pulse")} />
+            <Mic className={cn("h-5 w-5 md:h-3.5 md:w-3.5", recorder.recording && "animate-pulse")} />
           </Button>
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 cursor-pointer text-muted-foreground transition-colors duration-150"
+            className="h-10 w-10 md:h-7 md:w-7 cursor-pointer text-muted-foreground transition-colors duration-150"
             onClick={() => {
               const def = new Date(Date.now() + 60 * 60 * 1000); // +1h
               setScheduleAt(format(def, "yyyy-MM-dd'T'HH:mm"));
@@ -446,7 +446,7 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
             aria-label="Agendar envio"
             title="Agendar envio"
           >
-            <Clock className="h-3.5 w-3.5" />
+            <Clock className="h-5 w-5 md:h-3.5 md:w-3.5" />
           </Button>
           <div className="flex-1" />
 
@@ -460,7 +460,7 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
               <button
                 type="button"
                 onClick={handleCancelVoice}
-                className="text-2xs text-muted-foreground hover:text-foreground hover:underline cursor-pointer"
+                className="h-9 md:h-auto px-2 md:px-0 text-2xs text-muted-foreground hover:text-foreground hover:underline cursor-pointer"
               >
                 cancelar
               </button>
@@ -472,10 +472,10 @@ export function MessageComposer({ conversationId, myEmpId }: Props) {
               size="sm"
               onClick={handleSend}
               disabled={!canSend}
-              className="h-7 gap-1.5 px-3 text-xs cursor-pointer"
+              className="h-10 md:h-7 gap-1.5 px-3.5 md:px-3 text-sm md:text-xs cursor-pointer"
               aria-label="Enviar mensagem"
             >
-              {send.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Send className="h-3 w-3" /> Enviar</>}
+              {send.isPending ? <Loader2 className="h-4 w-4 md:h-3.5 md:w-3.5 animate-spin" /> : <><Send className="h-4 w-4 md:h-3 md:w-3" /> Enviar</>}
             </Button>
           )}
         </div>

@@ -162,3 +162,135 @@
   background-color: hsl(var(--destructive));
   height: 2px;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Overrides restantes do CSS base do react-big-calendar (v8.44.1).
+
+   O pacote traz ~40 cores fixas (#ddd, #fff, #3174ad, rgba(0,0,0,.5)...)
+   que sobreviviam ao override parcial acima: apareciam em tema escuro
+   como blocos claros e bordas cinza-claro. Tudo aqui é token do DS.
+
+   ATENÇÃO: as classes .rbc-event-live / .rbc-event-scheduled /
+   .rbc-event-completed são consumidas por código de Eventos — não
+   remover nem renomear.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Dias fora do mês ── */
+.rbc-off-range {
+  color: hsl(var(--muted-foreground) / 0.6);
+}
+
+/* ── Evento sem classe de status: cai no azul #3174ad do pacote.
+      Envolvido em :where() de propósito — especificidade ZERO, para que
+      QUALQUER classe de status (.rbc-event-live/-scheduled/-completed) ou
+      utilitário Tailwind vindo do eventPropGetter continue vencendo,
+      independentemente da ordem no arquivo. ── */
+:where(.rbc-event, .rbc-day-slot .rbc-background-event) {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+:where(.rbc-event.rbc-selected, .rbc-day-slot .rbc-selected.rbc-background-event) {
+  background-color: hsl(var(--primary));
+}
+/* o anel de seleção, sim, vale para todos os eventos */
+.rbc-event.rbc-selected,
+.rbc-day-slot .rbc-selected.rbc-background-event {
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.55);
+}
+/* o pacote usa `outline: 5px auto #3b99fc` — foco do Chrome antigo */
+.rbc-event:focus,
+.rbc-event:focus-visible,
+.rbc-day-slot .rbc-background-event:focus {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+.rbc-event-overlaps {
+  box-shadow: -1px 1px 5px 0 hsl(var(--foreground) / 0.28);
+}
+
+/* ── Seleção de célula / faixa de horário arrastada ── */
+.rbc-selected-cell {
+  background-color: hsl(var(--primary) / 0.12);
+}
+.rbc-slot-selection {
+  background-color: hsl(var(--primary) / 0.85);
+  color: hsl(var(--primary-foreground));
+  border-radius: 0.25rem;
+}
+
+/* ── "+N mais": botão e o popover que ele abre (era #fff puro) ── */
+.rbc-show-more {
+  background-color: transparent;
+}
+.rbc-show-more:hover,
+.rbc-show-more:focus-visible {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+.rbc-overlay {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px hsl(var(--foreground) / 0.18);
+}
+.rbc-overlay-header {
+  border-bottom: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-weight: 600;
+}
+
+/* ── Grades e bordas internas (todas eram #ddd / #f7f7f7 / #e5e5e5) ── */
+.rbc-day-bg + .rbc-day-bg,
+.rbc-header + .rbc-header,
+.rbc-rtl .rbc-header + .rbc-header,
+.rbc-rtl .rbc-day-bg + .rbc-day-bg,
+.rbc-timeslot-group,
+.rbc-time-header-content,
+.rbc-time-header.rbc-overflowing,
+.rbc-time-header-gutter,
+.rbc-time-content,
+.rbc-time-content > * + * > *,
+.rbc-time-view .rbc-allday-cell + .rbc-allday-cell,
+.rbc-agenda-view table.rbc-agenda-table,
+.rbc-month-row + .rbc-month-row {
+  border-color: hsl(var(--border));
+}
+.rbc-day-slot .rbc-time-slot {
+  border-top: 1px solid hsl(var(--border) / 0.5);
+}
+.rbc-time-gutter,
+.rbc-label {
+  color: hsl(var(--muted-foreground));
+}
+/* coluna de horas fixa em vistas com recursos — era background: white */
+.rbc-time-view-resources .rbc-time-gutter,
+.rbc-time-view-resources .rbc-time-header-gutter {
+  background-color: hsl(var(--card));
+  border-right: 1px solid hsl(var(--border));
+}
+
+/* ── Toolbar: foco visível pelo token de ring, não pelo anel do UA ── */
+.rbc-toolbar button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+.rbc-btn-group > button + button {
+  border-left-color: hsl(var(--border));
+}
+
+/* ── Agenda vazia ── */
+.rbc-agenda-empty {
+  color: hsl(var(--muted-foreground));
+  padding: 1rem;
+  text-align: center;
+}
+
+/* ── Addon de drag-and-drop (react-big-calendar/lib/addons/dragAndDrop) ── */
+.rbc-addons-dnd .rbc-addons-dnd-resize-ns-icon,
+.rbc-addons-dnd .rbc-addons-dnd-resize-ew-icon {
+  border-color: hsl(var(--primary-foreground) / 0.7);
+}
+.rbc-addons-dnd .rbc-addons-dnd-over {
+  background-color: hsl(var(--primary) / 0.1);
+}

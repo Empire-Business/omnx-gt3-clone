@@ -1,7 +1,8 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { useLivePathname } from "@/hooks/useLivePathname";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, CheckSquare, MessageSquare, Rss, FolderKanban } from "lucide-react";
-import { useChatUnread } from "@/hooks/useChat";
+import { LayoutDashboard, CheckSquare, MessageSquare, Rss, FolderKanban, PartyPopper } from "lucide-react";
+import { useChatUnreadTotal } from "@/hooks/useChat";
 import { useFeedUnreadCount } from "@/hooks/useFeed";
 import { useAuth } from "@/hooks/useAuth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -22,13 +23,21 @@ const items: Item[] = [
   { label: "Chat", icon: MessageSquare, to: "/chat", badgeKey: "chat" },
   { label: "Feed", icon: Rss, to: "/feed", badgeKey: "feed" },
   { label: "Projetos", icon: FolderKanban, to: "/projetos" },
+  { label: "Eventos", icon: PartyPopper, to: "/eventos" },
   { label: "Mais", to: "/mais", isProfile: true },
 ];
 
 export function BottomNav() {
-  const { pathname } = useLocation();
-  const { data: chatUnreadMap } = useChatUnread();
-  const { data: feedUnread } = useFeedUnreadCount();
+  // Pathname real: dentro de uma conversa a URL muda por replaceState, que o
+  // useLocation() nao ve — era por isso que a nav continuava aparecendo por
+  // cima do chat.
+  const pathname = useLivePathname();
+  const chatUnread = useChatUnreadTotal(); // já exclui conversas silenciadas
+  // `useFeedUnreadCount()` devolve `{ count, markRead }` — não `{ data }`.
+  // A desestruturação antiga lia uma propriedade inexistente, então o badge do
+  // Feed no mobile ficava permanentemente zerado (a query pesada por trás dele
+  // rodava do mesmo jeito).
+  const { count: feedUnread } = useFeedUnreadCount();
   const { user, profile } = useAuth();
 
   const inChatConversation = /^\/chat\/[^/]+/.test(pathname);
@@ -37,9 +46,6 @@ export function BottomNav() {
     return null;
   }
 
-  const chatUnread = chatUnreadMap
-    ? Array.from(chatUnreadMap.values()).reduce((a, b) => a + b, 0)
-    : 0;
   const feedCount = feedUnread || 0;
 
   const getBadge = (key?: "chat" | "feed") => {
@@ -66,7 +72,7 @@ export function BottomNav() {
               <Link
                 to={item.to}
                 className={cn(
-                  "relative flex flex-col items-center justify-center gap-0.5 py-2 px-1 min-h-[56px] transition-colors",
+                  "relative flex flex-col items-center justify-center gap-0.5 py-2 px-0.5 min-h-[56px] transition-colors",
                   active ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 )}
                 aria-current={active ? "page" : undefined}

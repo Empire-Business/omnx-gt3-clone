@@ -1,8 +1,23 @@
-import { Bell, Check, CheckCheck, Trash2, ExternalLink } from "lucide-react";
-import { useNotifications, Notification } from "@/hooks/useNotifications";
+import { Bell, BellOff, CheckCheck, Trash2, ExternalLink } from "lucide-react";
+import {
+  useNotifications,
+  useNotificationMutes,
+  Notification,
+  NotifMuteKind,
+} from "@/hooks/useNotifications";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
@@ -61,6 +76,86 @@ function NotificationItem({
   );
 }
 
+/** Opções de duração oferecidas no menu do sino. `null` = até reativar. */
+const MUTE_DURATIONS: { label: string; hours: number | null }[] = [
+  { label: "Por 1 hora", hours: 1 },
+  { label: "Por 8 horas", hours: 8 },
+  { label: "Por 24 horas", hours: 24 },
+  { label: "Por 7 dias", hours: 24 * 7 },
+  { label: "Até eu reativar", hours: null },
+];
+
+/**
+ * Sino de silenciamento no cabeçalho do painel: escolhe o QUE silenciar
+ * (tarefas, mensagens ou tudo) e POR QUANTO TEMPO.
+ */
+function NotificationMuteMenu() {
+  const { isMuted, mutedUntil, setMute, clearMute } = useNotificationMutes();
+  const anyMuted = isMuted("all") || isMuted("task") || isMuted("chat");
+  const busy = setMute.isPending || clearMute.isPending;
+
+  const until = mutedUntil(isMuted("all") ? "all" : isMuted("task") ? "task" : "chat");
+  const untilLabel = anyMuted
+    ? until
+      ? `Silenciado até ${new Date(until).toLocaleString("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`
+      : "Silenciado até você reativar"
+    : null;
+
+  const submenu = (kind: NotifMuteKind, label: string) => (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger disabled={busy}>{label}</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        {MUTE_DURATIONS.map((d) => (
+          <DropdownMenuItem
+            key={d.label}
+            onClick={() => setMute.mutate({ kind, durationHours: d.hours })}
+          >
+            {d.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("h-7 w-7 p-0", anyMuted && "text-primary")}
+          aria-label={anyMuted ? "Notificações silenciadas" : "Silenciar notificações"}
+          title={untilLabel ?? "Silenciar notificações"}
+        >
+          {anyMuted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          {untilLabel ?? "Silenciar notificações"}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {submenu("task", "Tarefas")}
+        {submenu("chat", "Mensagens")}
+        {submenu("all", "Tudo")}
+        {anyMuted && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={busy} onClick={() => clearMute.mutate("all")}>
+              Reativar notificações
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function NotificationsList() {
   const { data: notifications, unreadCount, markAsRead, markAllAsRead, deleteNotification } = useNotifications();
   const navigate = useNavigate();
@@ -74,11 +169,14 @@ function NotificationsList() {
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h3 className="text-sm font-semibold">Notificações</h3>
-        {unreadCount > 0 && (
-          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => markAllAsRead.mutate()}>
-            <CheckCheck className="w-3 h-3" /> Marcar todas como lidas
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {unreadCount > 0 && (
+            <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => markAllAsRead.mutate()}>
+              <CheckCheck className="w-3 h-3" /> Marcar todas como lidas
+            </Button>
+          )}
+          <NotificationMuteMenu />
+        </div>
       </div>
       <div className="overflow-y-auto max-h-[420px]">
         {(!notifications || notifications.length === 0) ? (
@@ -106,11 +204,17 @@ function NotificationsList() {
 
 export function NotificationsPopover() {
   const { unreadCount } = useNotifications();
+  const { isMuted } = useNotificationMutes();
   const isMobile = useIsMobile();
+  const silenced = isMuted("all") || isMuted("task") || isMuted("chat");
 
   const trigger = (
-    <button data-notification-target="bell" className="relative p-2 rounded-xl hover:bg-muted transition-colors" aria-label={`Notificações${unreadCount > 0 ? `: ${unreadCount} não lida${unreadCount !== 1 ? "s" : ""}` : ""}`}>
-      <Bell className="w-5 h-5 text-muted-foreground" />
+    <button data-notification-target="bell" className="relative p-2 rounded-xl hover:bg-muted transition-colors" aria-label={`Notificações${unreadCount > 0 ? `: ${unreadCount} não lida${unreadCount !== 1 ? "s" : ""}` : ""}${silenced ? " (silenciadas)" : ""}`}>
+      {silenced ? (
+        <BellOff className="w-5 h-5 text-muted-foreground" />
+      ) : (
+        <Bell className="w-5 h-5 text-muted-foreground" />
+      )}
       {unreadCount > 0 && (
         <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-destructive text-destructive-foreground text-[10px] font-bold rounded-full flex items-center justify-center">
           {unreadCount > 9 ? "9+" : unreadCount}

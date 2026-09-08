@@ -15,6 +15,9 @@ import { CheckSquare, MessageSquare, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMutedChannels } from "@/hooks/useChat";
+import { useNotificationMutes } from "@/hooks/useNotifications";
+import { playNotificationSound } from "@/lib/notification-sound";
 
 type NotifKind = "task" | "chat";
 
@@ -27,30 +30,6 @@ interface SmartNotif {
   createdAt: number;
 }
 
-function playPing(kind: NotifKind) {
-  try {
-    const Ctx = (window.AudioContext || (window as any).webkitAudioContext);
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = "sine";
-    // Notas distintas: tarefa = 660→880, chat = 880→660
-    const start = kind === "task" ? 660 : 880;
-    const end = kind === "task" ? 880 : 660;
-    o.frequency.setValueAtTime(start, ctx.currentTime);
-    o.frequency.exponentialRampToValueAtTime(end, ctx.currentTime + 0.18);
-    g.gain.setValueAtTime(0.0001, ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.32);
-    o.connect(g).connect(ctx.destination);
-    o.start();
-    o.stop(ctx.currentTime + 0.34);
-  } catch {
-    /* silencioso */
-  }
-}
-
 export function SmartNotificationToaster() {
   const { user, profile } = useAuth();
   const location = useLocation();
@@ -59,13 +38,23 @@ export function SmartNotificationToaster() {
   const [toasts, setToasts] = useState<SmartNotif[]>([]);
   const myEmployeeIdRef = useRef<string | null>(null);
 
+  // Silenciamento: por conversa (chat_channel_mutes) e por tipo
+  // (notification_mutes). Guardados em ref para que o realtime não seja
+  // re-subscrito a cada refetch dessas queries.
+  const { data: mutedChannels } = useMutedChannels();
+  const { isMuted } = useNotificationMutes();
+  const mutedChannelsRef = useRef<Set<string> | undefined>(mutedChannels);
+  mutedChannelsRef.current = mutedChannels;
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+
   const onTarefasPage = location.pathname.startsWith("/tarefas");
   const onChatPage = location.pathname.startsWith("/chat");
 
   const push = useCallback((n: Omit<SmartNotif, "id" | "createdAt">) => {
     const full: SmartNotif = { ...n, id: crypto.randomUUID(), createdAt: Date.now() };
     setToasts((prev) => [...prev.slice(-2), full]); // máx 3
-    playPing(n.kind);
+    void playNotificationSound(n.kind);
     // Auto-dismiss
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== full.id));
@@ -102,6 +91,7 @@ export function SmartNotificationToaster() {
         { event: "INSERT", schema: "public", table: "task_assignees" },
         async (payload: any) => {
           if (onTarefasPage) return;
+          if (isMutedRef.current("task")) return;
           const empId = myEmployeeIdRef.current;
           if (!empId || payload.new?.employee_id !== empId) return;
           const taskId = payload.new?.task_id;
@@ -124,8 +114,10 @@ export function SmartNotificationToaster() {
             body: `${task.title}${dueLabel}`,
             href: "/tarefas",
           });
-          qc.invalidateQueries({ queryKey: ["tasks"] });
-          qc.invalidateQueries({ queryKey: ["notifications"] });
+          // Invalidação restrita ao tenant/usuário atual (CLAUDE.md §3) — antes
+          // era ["tasks"] e ["notifications"] puros, que varriam todos os tenants.
+          qc.invalidateQueries({ queryKey: ["tasks", profile.tenant_id] });
+          qc.invalidateQueries({ queryKey: ["notifications", user.id] });
         },
       )
       .subscribe();
@@ -152,6 +144,11 @@ export function SmartNotificationToaster() {
           if (payload.new?.author_id === user.id) return;
           const channelId = payload.new?.channel_id;
           if (!channelId) return;
+          // Conversa silenciada (grupo ou DM) ou mute global de mensagens →
+          // nada de toast nem som. Este era o ponto que continuava apitando
+          // mesmo com o grupo silenciado.
+          if (mutedChannelsRef.current?.has(channelId)) return;
+          if (isMutedRef.current("chat")) return;
           // Confirma que sou membro do canal
           const { data: membership } = await supabase
             .from("chat_channel_members" as any)
@@ -178,7 +175,7 @@ export function SmartNotificationToaster() {
             body: content.slice(0, 140),
             href: `/chat/${channelId}`,
           });
-          qc.invalidateQueries({ queryKey: ["chat_unread"] });
+          qc.invalidateQueries({ queryKey: ["chat_unread", user.id] });
           qc.invalidateQueries({ queryKey: ["chat_last_messages"] });
         },
       )
@@ -187,6 +184,38 @@ export function SmartNotificationToaster() {
       supabase.removeChannel(ch);
     };
   }, [user?.id, profile?.tenant_id, onChatPage, push, qc]);
+
+  // Realtime: alguém reagiu a uma mensagem minha.
+  // Escuta `notifications` (e não `chat_reactions`) porque o trigger
+  // notify_chat_reaction já resolve autor, mute e nome de quem reagiu.
+  useEffect(() => {
+    if (!user?.id) return;
+    const ch = supabase
+      .channel(`smart-notif-reactions-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload: any) => {
+          if (payload.new?.type !== "chat_reaction") return;
+          if (isMutedRef.current("chat")) return;
+          push({
+            kind: "chat",
+            title: payload.new.title,
+            body: (payload.new.body as string | null)?.slice(0, 140) || "",
+            href: payload.new.link || "/chat",
+          });
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [user?.id, push]);
 
   const dismiss = (id: string, suckTo?: NotifKind) => {
     if (suckTo) {

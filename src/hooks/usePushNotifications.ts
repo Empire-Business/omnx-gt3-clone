@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { useEmployees } from "@/hooks/useEmployees";
+import { useQuery } from "@tanstack/react-query";
+import { getVapidPublicKey } from "@/integrations/supabase/config";
 
-const VAPID_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+// Vem de `config.ts` (env var com fallback), NÃO direto de import.meta.env: o
+// build do Lovable não injeta VITE_*, e sem a chave o hook inteiro se declarava
+// "não suportado" em produção para todos os navegadores.
+const VAPID_KEY = getVapidPublicKey();
 
 export type PushPermission = "default" | "granted" | "denied" | "unsupported";
 
@@ -68,6 +72,34 @@ const inAppBrowser =
 const OPEN_IN_CHROME_MSG =
   "As notificações não funcionam neste navegador embutido. Abra o app pelo Chrome (menu ⋮ → \"Abrir no Chrome\") e tente de novo.";
 
+// iOS/iPadOS só expõem Web Push quando o site foi ADICIONADO À TELA DE INÍCIO e
+// é aberto como app (standalone). Numa aba normal do Safari o `PushManager` nem
+// existe — sem esta distinção o iPhone só via "navegador não suportado", sem
+// saber que bastava instalar o app.
+const isIOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent || "") ||
+    // iPadOS 13+ se identifica como Mac; o toque distingue.
+    (/Macintosh/.test(navigator.userAgent || "") && (navigator.maxTouchPoints ?? 0) > 1));
+
+const isStandalone =
+  typeof window !== "undefined" &&
+  (window.matchMedia?.("(display-mode: standalone)").matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true);
+
+// iOS fora do modo app: dá pra resolver instalando — mensagem acionável.
+const iosNeedsInstall = isIOS && !isStandalone && !isSupported;
+
+const IOS_INSTALL_MSG =
+  "No iPhone, as notificações só funcionam com o app instalado. Toque em Compartilhar (⬆️) → \"Adicionar à Tela de Início\", abra o GT3 por lá e ative de novo.";
+
+/** Motivo acionável de o push estar indisponível — nunca um "não suporta" seco. */
+function unsupportedReason(): string {
+  if (inAppBrowser) return OPEN_IN_CHROME_MSG;
+  if (iosNeedsInstall) return IOS_INSTALL_MSG;
+  return "Este navegador não suporta notificações push.";
+}
+
 /**
  * Web Push (PWA) opt-in.
  *
@@ -81,7 +113,6 @@ const OPEN_IN_CHROME_MSG =
  */
 export function usePushNotifications() {
   const { profile } = useAuth();
-  const { data: employees } = useEmployees();
 
   const [permission, setPermission] = useState<PushPermission>(
     isSupported ? (Notification.permission as PushPermission) : "unsupported",
@@ -90,8 +121,26 @@ export function usePushNotifications() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const myEmployeeId =
-    employees?.find((e) => e.user_id === profile?.user_id)?.id ?? null;
+  // Query DIRETA e leve, em vez de `useEmployees()`. Aquele hook monta a lista
+  // inteira de colaboradores do tenant (joins com profiles, cargos, áreas); no
+  // celular ele demora, e enquanto não resolvia o `enable()` falhava com "Seu
+  // perfil ainda está carregando" e o toggle não ligava. Aqui só precisamos do
+  // próprio employee_id. Mesmo padrão já usado no SmartNotificationToaster.
+  const { data: myEmployeeId = null } = useQuery({
+    queryKey: ["my_employee_id", profile?.user_id, profile?.tenant_id],
+    enabled: !!profile?.user_id && !!profile?.tenant_id,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("id")
+        .eq("user_id", profile!.user_id)
+        .eq("tenant_id", profile!.tenant_id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data?.id as string | undefined) ?? null;
+    },
+  });
 
   // Faz a inscrição propriamente dita. Pressupõe permissão já concedida.
   // Lança erro descritivo em vez de falhar em silêncio — assim o clique em "Ativar"
@@ -99,7 +148,7 @@ export function usePushNotifications() {
   // em vez de "não acontecer nada".
   const subscribeNow = useCallback(async (): Promise<boolean> => {
     if (!isSupported) {
-      throw new Error(inAppBrowser ? OPEN_IN_CHROME_MSG : "Este navegador não suporta notificações push.");
+      throw new Error(unsupportedReason());
     }
     if (!myEmployeeId || !profile?.tenant_id) {
       throw new Error("Seu perfil ainda está carregando. Aguarde alguns segundos e tente de novo.");
@@ -122,6 +171,32 @@ export function usePushNotifications() {
     setIsSubscribed(true);
     return true;
   }, [myEmployeeId, profile?.tenant_id]);
+
+  // Reflete no estado a inscrição que JÁ existe no navegador, SEM depender de
+  // `useEmployees`/`profile`. A re-inscrição abaixo só roda quando o employee
+  // termina de carregar (query pesada); até lá `isSubscribed` ficava `false` e
+  // o switch da Central aparecia DESLIGADO mesmo com a inscrição ativa e salva
+  // no banco — foi exatamente o que aconteceu em produção: subscription criada
+  // e gravada, e o toggle mostrando desligado logo depois.
+  useEffect(() => {
+    if (!isSupported) return;
+    if (Notification.permission !== "granted") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (!cancelled && sub && appServerKeyMatches(sub, urlBase64ToUint8Array(VAPID_KEY))) {
+          setIsSubscribed(true);
+        }
+      } catch {
+        /* silencioso — a re-inscrição abaixo ainda tenta */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Re-inscrição silenciosa para quem já concedeu permissão (sem prompt).
   useEffect(() => {
@@ -157,12 +232,39 @@ export function usePushNotifications() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [myEmployeeId, profile?.tenant_id, subscribeNow]);
 
+  // Desliga o push NESTE aparelho: cancela a inscrição no navegador e remove a
+  // linha correspondente do banco (a RLS restringe ao próprio employee).
+  const disable = useCallback(async (): Promise<boolean> => {
+    setError(null);
+    setIsBusy(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        const { endpoint } = sub;
+        await sub.unsubscribe().catch(() => {});
+        const { error: delErr } = await supabase
+          .from("push_subscriptions" as any)
+          .delete()
+          .eq("endpoint", endpoint);
+        if (delErr) throw delErr;
+      }
+      setIsSubscribed(false);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível desativar agora.");
+      return false;
+    } finally {
+      setIsBusy(false);
+    }
+  }, []);
+
   // Opt-in explícito — DEVE ser chamado a partir de um gesto do usuário (clique).
   // Retorna `true` quando a inscrição foi concluída com sucesso.
   const enable = useCallback(async (): Promise<boolean> => {
     setError(null);
     if (!isSupported) {
-      setError(inAppBrowser ? OPEN_IN_CHROME_MSG : "Este navegador não suporta notificações push.");
+      setError(unsupportedReason());
       return false;
     }
     setIsBusy(true);
@@ -189,10 +291,15 @@ export function usePushNotifications() {
   return {
     supported: isSupported,
     inApp: inAppBrowser,
+    /** iOS em aba do Safari: resolve instalando o app na Tela de Início. */
+    needsIOSInstall: iosNeedsInstall,
+    /** Texto acionável quando `supported` é false. */
+    unsupportedReason: unsupportedReason(),
     permission,
     isSubscribed,
     isBusy,
     error,
     enable,
+    disable,
   };
 }

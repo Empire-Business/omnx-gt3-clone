@@ -37,18 +37,30 @@ Deno.serve(async (req) => {
     const employeeIds: string[] = Array.isArray(body.employee_ids) ? body.employee_ids : [];
     if (!employeeIds.length) return json({ sent: 0, reason: "no targets" });
 
-    const { data: subs } = await supabase
+    const { data: subs, error: subsErr } = await supabase
       .from("push_subscriptions")
       .select("endpoint, keys")
       .in("employee_id", employeeIds);
 
+    // O `error` não era desestruturado: uma consulta que falhava caía no
+    // `!subs?.length` e respondia 200 {sent:0,"no subscriptions"} — falha total
+    // reportada como sucesso, e o chamador (trigger/cron) nunca soube. Erro de
+    // consulta é 500; "ninguém tem subscription" continua sendo 200, que é
+    // resultado legítimo para os demais chamadores.
+    if (subsErr) {
+      console.error("[send-push] falha lendo push_subscriptions:", subsErr.message);
+      return json({ error: subsErr.message }, 500);
+    }
+
     if (!subs?.length) return json({ sent: 0, reason: "no subscriptions" });
 
-    const site = Deno.env.get("SITE_URL") ?? "https://gt3.omnx.pro";
+    // Sem `icon` e com URL RELATIVA de propósito: o service worker resolve os
+    // dois a partir do próprio origin. Depender de SITE_URL aqui significa que
+    // um env apontando para domínio antigo quebra o ícone da notificação e
+    // manda o clique para um site morto.
     const payload = {
       title: (body.title as string) ?? "GT3",
       body: (body.body as string) ?? "",
-      icon: `${site}/logo.png`,
       tag: (body.tag as string) ?? "gt3",
       data: { url: (body.url as string) ?? "/" },
     };

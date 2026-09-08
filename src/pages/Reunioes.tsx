@@ -85,6 +85,7 @@ import { MeetingApproval } from "@/components/meetings/MeetingApproval";
 import { MeetingEditDialog } from "@/components/meetings/MeetingEditDialog";
 import { MeetingAttendeesManager } from "@/components/meetings/MeetingAttendeesManager";
 import { MeetingCard } from "@/components/meetings/MeetingCard";
+import { MeetingStats } from "@/components/meetings/MeetingStats";
 import { MeetingsCalendar } from "@/components/meetings/MeetingsCalendar";
 import { RecurringMeetingDialog } from "@/components/meetings/RecurringMeetingDialog";
 import {
@@ -435,7 +436,18 @@ export default function Reunioes() {
     setActiveTab("info");
   };
 
+  /**
+   * A IA só tem o que processar se existe transcrição salva. Sem ela a
+   * `meeting-ai` responde 400 ("no transcript available") — e antes esse motivo
+   * nunca chegava à tela, então o botão convidava a clicar em vão.
+   */
+  const hasTranscript = (m: Meeting) => !!m.transcript_raw?.trim();
+
   const handleReprocessTranscript = async (meeting: Meeting) => {
+    if (!hasTranscript(meeting)) {
+      toast.error("Esta reunião não tem transcrição salva — não há o que a IA processar.");
+      return;
+    }
     try {
       await processTranscript.mutateAsync({
         meeting_id: meeting.id,
@@ -637,8 +649,12 @@ export default function Reunioes() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleReprocessTranscript(selectedMeeting)}
-                    disabled={processTranscript.isPending}
-                    title="Reinicia o processamento do zero"
+                    disabled={processTranscript.isPending || !hasTranscript(selectedMeeting)}
+                    title={
+                      hasTranscript(selectedMeeting)
+                        ? "Reinicia o processamento do zero"
+                        : "Sem transcrição salva — não há o que reprocessar"
+                    }
                   >
                     {processTranscript.isPending
                       ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -694,7 +710,14 @@ export default function Reunioes() {
                 <TabsTrigger value="approval">Aprovação</TabsTrigger>
               </>
             )}
+            <TabsTrigger value="stats">Estatísticas</TabsTrigger>
           </TabsList>
+
+          {/* Estatísticas de participação — disponível para QUALQUER reunião.
+              O próprio componente trata reunião sem dados medidos. */}
+          <TabsContent value="stats" className="space-y-4">
+            <MeetingStats meeting={selectedMeeting} />
+          </TabsContent>
 
           <TabsContent value="info" className="space-y-6">
             {/* Card principal — Detalhes */}
@@ -1027,7 +1050,12 @@ export default function Reunioes() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleReprocessTranscript(selectedMeeting)}
-                    disabled={processTranscript.isPending}
+                    disabled={processTranscript.isPending || !hasTranscript(selectedMeeting)}
+                    title={
+                      hasTranscript(selectedMeeting)
+                        ? "Reprocessa a transcrição com a IA"
+                        : "Sem transcrição salva — não há o que reprocessar"
+                    }
                   >
                     {processTranscript.isPending ? (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />

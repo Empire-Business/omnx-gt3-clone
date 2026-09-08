@@ -67,7 +67,8 @@ function StatusBadge({ f }: { f: FeatureInfo }) {
 }
 
 export function IntegrationsCard() {
-  const { features, loading, isError, refetch, setManuallyDisabled } = useIntegrations({ probe: true });
+  const { features, loading, isError, overridesUnavailable, refetch, setManuallyDisabled } =
+    useIntegrations({ probe: true });
 
   return (
     <Card>
@@ -96,6 +97,14 @@ export function IntegrationsCard() {
           </p>
         ) : (
           <div className="flex flex-col divide-y divide-border">
+            {/* Fail-open: as features seguem visíveis, mas desligar não persiste. */}
+            {overridesUnavailable && (
+              <p className="pb-4 text-xs text-warning">
+                Os ajustes manuais não estão disponíveis neste ambiente (tabela{" "}
+                <code className="font-mono">tenant_features</code> ausente). As integrações
+                continuam funcionando normalmente; apenas o botão de desligar não salva.
+              </p>
+            )}
             {features.map((f) => {
               const meta = META[f.key];
               const Icon = meta.icon;

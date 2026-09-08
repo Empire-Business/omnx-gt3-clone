@@ -120,7 +120,10 @@ export function useCreateRecurringMeeting() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["meetings", "recurring", tenantId] });
-      qc.invalidateQueries({ queryKey: ["meetings", "list", tenantId] });
+      // A lista principal de reunioes e ["meetings", tenantId] (useMeetings.ts).
+      // A chave ["meetings", "list", tenantId] nao existe em query nenhuma do
+      // projeto: esta invalidacao nunca atualizou nada desde que foi escrita.
+      qc.invalidateQueries({ queryKey: ["meetings", tenantId] });
       toast.success("Reunião recorrente criada");
     },
     onError: (err: any) => {

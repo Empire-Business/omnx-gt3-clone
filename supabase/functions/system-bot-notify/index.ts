@@ -58,10 +58,20 @@ async function dispatchMeetingReminders(svc: ReturnType<typeof createClient>) {
     const { data: directData, error: directErr } = await svc
       .from("meetings")
       .select(
-        "id, tenant_id, title, next_occurrence_at, reminder_minutes_before, livekit_room_name, participants, area_id",
+        "id, tenant_id, title, next_occurrence_at, reminder_minutes_before, livekit_room_name, participants, area_id, last_reminder_sent_at",
       )
       .not("next_occurrence_at", "is", null)
-      .or("last_reminder_sent_at.is.null,last_reminder_sent_at.lt.next_occurrence_at")
+      // BUG CORRIGIDO em 2026-08-31: aqui havia
+      //   .or("last_reminder_sent_at.is.null,last_reminder_sent_at.lt.next_occurrence_at")
+      // que derrubava a função inteira com
+      //   invalid input syntax for type timestamp with time zone: "next_occurrence_at"
+      // O PostgREST trata o lado direito de um filtro como VALOR LITERAL: ele
+      // tentava converter a string "next_occurrence_at" em timestamp. Comparar
+      // duas COLUNAS não é expressável nessa sintaxe.
+      //
+      // Este erro estava escondido atrás de um 401 (o cron chamava sem header
+      // de autenticação), então nunca aparecia nos logs. A comparação foi para
+      // o filtro em JS abaixo — o conjunto é pequeno (reuniões da próxima hora).
       .lte(
         "next_occurrence_at",
         new Date(Date.now() + 60 * 60 * 1000).toISOString(),
@@ -69,6 +79,14 @@ async function dispatchMeetingReminders(svc: ReturnType<typeof createClient>) {
       .gte("next_occurrence_at", new Date().toISOString());
     if (directErr) throw directErr;
     meetings = (directData || []).filter((m: any) => {
+      // Não relembrar a mesma ocorrência duas vezes. Esta comparação vivia no
+      // `.or(...)` do PostgREST e não funcionava (ver comentário acima): ela
+      // compara duas COLUNAS, o que só dá para fazer aqui.
+      const jaAvisado = m.last_reminder_sent_at &&
+        new Date(m.last_reminder_sent_at).getTime() >=
+          new Date(m.next_occurrence_at).getTime();
+      if (jaAvisado) return false;
+
       const eta = new Date(m.next_occurrence_at).getTime() - Date.now();
       return eta <= m.reminder_minutes_before * 60 * 1000 && eta > -60 * 1000;
     }) as MeetingDue[];
@@ -105,7 +123,15 @@ async function dispatchMeetingReminders(svc: ReturnType<typeof createClient>) {
 
     for (const uid of userIds) {
       // 1) Notificação in-app
-      await svc.from("notifications").insert({
+      //
+      // BUG CORRIGIDO em 2026-08-31: este insert mandava `metadata: { meeting_id }`
+      // e a tabela `notifications` NÃO TEM essa coluna (conferido no banco de
+      // produção: id, tenant_id, user_id, type, title, body, link, is_read,
+      // created_at, source_id, source). O PostgREST rejeitava a linha inteira e,
+      // como o retorno não era verificado, o erro sumia — ou seja, o lembrete
+      // in-app de reunião provavelmente nunca chegou a ninguém. A coluna certa
+      // para amarrar a notificação à origem é `source_id`.
+      const { error: notifErr } = await svc.from("notifications").insert({
         tenant_id: m.tenant_id,
         user_id: uid,
         type: "meeting_reminder",
@@ -113,8 +139,16 @@ async function dispatchMeetingReminders(svc: ReturnType<typeof createClient>) {
         body: m.title,
         link: meetUrl,
         source: "system-bot",
-        metadata: { meeting_id: m.id },
+        source_id: m.id,
       });
+      // Não aborta o lote: falhar para um usuário não pode impedir os outros de
+      // serem avisados. Mas agora ao menos APARECE no log, em vez de sumir.
+      if (notifErr) {
+        console.error(
+          `[system-bot-notify] falha ao inserir notificação in-app (user ${uid}, meeting ${m.id}):`,
+          notifErr.message,
+        );
+      }
 
       // 2) DM do bot via chat
       const { data: conv } = await svc.rpc("ensure_dm_conversation", {
@@ -189,7 +223,24 @@ Deno.serve(async (req) => {
   try {
     const auth = req.headers.get("Authorization") || "";
     const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const isCron = auth === `Bearer ${serviceRole}`;
+
+    // BUG CORRIGIDO em 2026-08-31: o lembrete de reunião NUNCA rodou.
+    //
+    // Esta função só aceitava `Authorization: Bearer <service_role>`, mas o job
+    // `meeting_reminder_dispatch` do pg_cron chama sem header nenhum:
+    //   headers := jsonb_build_object('Content-Type','application/json')
+    // Sem Authorization, `isCron` era false, o `getUser()` devolvia null e a
+    // resposta era 401 — antes de qualquer lógica de lembrete. Confirmado nos
+    // logs: 401 a cada minuto, e nenhuma execução real desde que o job existe.
+    //
+    // Passa a aceitar também `x-cron-secret`, que é o padrão já usado pelos
+    // outros jobs deste projeto (`email-unread-chat`, `notify-upcoming-events`)
+    // e lido do vault na hora da chamada — assim o cron não precisa carregar a
+    // service_role key dentro do catálogo `cron.job`, que é legível por quem
+    // tem acesso ao banco.
+    const cronSecret = Deno.env.get("CRON_SECRET");
+    const isCron = auth === `Bearer ${serviceRole}` ||
+      (!!cronSecret && req.headers.get("x-cron-secret") === cronSecret);
 
     const svc = createClient(Deno.env.get("SUPABASE_URL")!, serviceRole);
 

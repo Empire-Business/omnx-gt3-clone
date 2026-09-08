@@ -72,10 +72,12 @@ export function useProjects(filters?: ProjectFilters) {
 
       const projectIds = allProjects.map((p) => p.id);
 
-      // Membros e contagem de tarefas em paralelo
+      // Membros e contagem de tarefas em paralelo.
+      // `tenant_id` explícito além do RLS (regra do CLAUDE.md); não altera nenhum
+      // número, pois os `projectIds` já vieram filtrados por este mesmo tenant.
       const [epResult, taskResult] = await Promise.all([
-        supabase.from("employee_projects").select("employee_id, project_id, role_in_project").in("project_id", projectIds),
-        supabase.from("tasks").select("project_id, status").in("project_id", projectIds),
+        supabase.from("employee_projects").select("employee_id, project_id, role_in_project").eq("tenant_id", tenantId).in("project_id", projectIds),
+        supabase.from("tasks").select("project_id, status").eq("tenant_id", tenantId).in("project_id", projectIds),
       ]);
 
       let membersMap: Record<string, ProjectMember[]> = {};
@@ -84,9 +86,17 @@ export function useProjects(filters?: ProjectFilters) {
       if (epResult.data && epResult.data.length > 0) {
         const empIds = [...new Set(epResult.data.map((ep) => ep.employee_id))];
 
+        // PERF (mesmo erro da v8.35.0): esta query vinha SEM `.in()`, ou seja,
+        // baixava o organograma INTEIRO do tenant (com os subselects de contagem de
+        // tarefas/projetos que a view calcula por linha) para depois usar apenas os
+        // colaboradores que são membros de algum projeto. Agora pede só os `empIds`
+        // realmente necessários — que são exatamente as chaves lidas de `empMap`
+        // logo abaixo, então nenhum nome/avatar/cargo exibido muda.
         const { data: orgData } = await supabase
           .from("organograma_view")
-          .select("employee_id, full_name, avatar_url, position_title");
+          .select("employee_id, full_name, avatar_url, position_title")
+          .eq("tenant_id", tenantId)
+          .in("employee_id", empIds);
 
         const { data: empPositions } = await (supabase
           .from("employee_positions" as any)
@@ -255,15 +265,56 @@ export function useProject(projectId: string | undefined) {
 
       if (error) throw error;
 
-      // Buscar membros
-      const { data: members } = await supabase
+      // Buscar membros.
+      // ⚠️ Sem embed `employees(profiles(...))`: NÃO existe FK entre
+      // `employees` e `profiles` no banco (o vínculo é employees.user_id →
+      // auth.users), e o PostgREST rejeitava a consulta inteira com PGRST200
+      // (HTTP 400) — a lista de membros vinha vazia. Nome e avatar são
+      // resolvidos em duas consultas, como em `useEmployeeStatusHistory`.
+      const { data: memberRows } = await supabase
         .from("employee_projects")
-        .select(`
-          employee_id,
-          role_in_project,
-          employee:employees(id, profiles:profiles(full_name, avatar_url))
-        `)
+        .select("employee_id, role_in_project, employee:employees(id, user_id)")
         .eq("project_id", projectId);
+
+      const rows = (memberRows ?? []) as unknown as {
+        employee_id: string;
+        role_in_project: string | null;
+        employee: { id: string; user_id: string | null } | null;
+      }[];
+
+      const memberUserIds = [
+        ...new Set(rows.map((r) => r.employee?.user_id).filter(Boolean)),
+      ] as string[];
+
+      const profileMap = new Map<
+        string,
+        { full_name: string | null; avatar_url: string | null }
+      >();
+      if (memberUserIds.length > 0) {
+        const { data: memberProfiles } = await supabase
+          .from("profiles")
+          .select("user_id, full_name, avatar_url")
+          .in("user_id", memberUserIds);
+        for (const prof of memberProfiles ?? []) {
+          profileMap.set(prof.user_id, {
+            full_name: prof.full_name,
+            avatar_url: prof.avatar_url,
+          });
+        }
+      }
+
+      const members = rows.map((r) => ({
+        employee_id: r.employee_id,
+        role_in_project: r.role_in_project,
+        employee: r.employee
+          ? {
+              id: r.employee.id,
+              profiles: r.employee.user_id
+                ? profileMap.get(r.employee.user_id) ?? null
+                : null,
+            }
+          : null,
+      }));
 
       // Buscar tarefas
       const { data: tasks } = await supabase

@@ -19,6 +19,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
 export interface SonioxToken {
+  /** Identidade estável do segmento — serve de `key` no React (nunca usar índice). */
+  id: string;
   speaker: string;
   text: string;
   timestamp: number;
@@ -35,6 +37,12 @@ export interface UseSonioxOptions {
   paused?: boolean;
   /** Constraints customizadas pro getUserMedia. */
   audioConstraints?: MediaTrackConstraints;
+  /**
+   * Liga o medidor de volume (`audioLevel`). Custa um setInterval(100ms) que
+   * dispara ~10 re-renders/s no componente que chama o hook. Default `true`
+   * por compatibilidade; desligue quando a UI não desenha o medidor.
+   */
+  vuMeter?: boolean;
 }
 
 export interface UseSonioxReturn {
@@ -55,20 +63,101 @@ export interface UseSonioxReturn {
 const WS_RECONNECT_MAX_ATTEMPTS = 5;
 const WS_RECONNECT_BASE_DELAY = 1000;
 
+/**
+ * Taxa de saída exigida pelo Soniox (pcm_s16le mono).
+ */
+const OUTPUT_SAMPLE_RATE = 16000;
+
+/**
+ * Tamanho do bloco acumulado dentro do worklet, em amostras da taxa NATIVA.
+ * 4864 = 38 quanta de 128 frames → ~101 ms a 48 kHz, ~110 ms a 44,1 kHz.
+ * Múltiplo exato de 128 para que os quanta encham o bloco sem sobra estrutural.
+ *
+ * Por que 100 ms: antes o worklet fazia um postMessage por quantum (128 frames),
+ * ou seja ~375 msg/s a 48 kHz — e cada mensagem virava um ws.send() na main thread.
+ * Acumulando ~100 ms caímos para ~10 msg/s e ~10 ws.send/s (37x menos), com um
+ * custo de latência de ~100 ms — irrelevante para legenda ao vivo.
+ */
+const WORKLET_BLOCK_SAMPLES = 4864;
+
+/**
+ * Worklet de captura: acumula ~100 ms de áudio, JÁ FAZ O DOWNSAMPLE para 16 kHz
+ * e converte para Int16 na própria thread de áudio, e então envia UM único
+ * postMessage com o ArrayBuffer transferível (zero cópia).
+ *
+ * Downsample no worklet (e não na main thread) porque:
+ *  - o laço de reamostragem é O(n) sobre o áudio e roda 10x/s de forma sustentada;
+ *    na main thread ele disputa frames com React/LiveKit/compositor (causa do travamento);
+ *  - `AudioWorkletGlobalScope` expõe `sampleRate`, então o worklet sabe a taxa nativa;
+ *  - a main thread passa a apenas repassar o ArrayBuffer pro WebSocket.
+ *
+ * Continuidade: a posição de leitura (`_readPos`) é fracionária e é CARREGADA entre
+ * blocos, então não há perda de amostras nem silêncio nas bordas. Na última amostra
+ * de cada bloco o vizinho da interpolação é clampado para a própria amostra (o bloco
+ * seguinte ainda não existe) — erro sub-amostral uma vez a cada ~100 ms, inaudível
+ * para STT e sem descartar nenhuma amostra.
+ */
 const WORKLET_CODE = `
+const BLOCK = ${WORKLET_BLOCK_SAMPLES};
+const OUT_RATE = ${OUTPUT_SAMPLE_RATE};
+
 class RecorderProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._paused = false;
+    this._buf = new Float32Array(BLOCK);
+    this._filled = 0;
+    this._ratio = sampleRate / OUT_RATE;
+    // Posição de leitura fracionária, carregada entre blocos (sem perda de amostras).
+    this._readPos = 0;
+    // Buffer de saída reutilizado (tamanho máximo possível + folga).
+    this._out = new Int16Array(Math.ceil(BLOCK / this._ratio) + 2);
     this.port.onmessage = (e) => {
-      if (e.data.type === 'pause') this._paused = e.data.value;
+      if (e.data.type === 'pause') {
+        this._paused = e.data.value;
+        // Ao pausar, descarta o parcial para não emendar áudio de antes/depois.
+        if (this._paused) { this._filled = 0; this._readPos = 0; }
+      }
     };
   }
+
+  _flush() {
+    const buf = this._buf;
+    const len = this._filled;
+    const ratio = this._ratio;
+    const out = this._out;
+    let n = 0;
+    let pos = this._readPos;
+    while (pos < len) {
+      const i0 = pos | 0;
+      const i1 = i0 + 1 < len ? i0 + 1 : len - 1;
+      const frac = pos - i0;
+      let s = buf[i0] * (1 - frac) + buf[i1] * frac;
+      s = s < -1 ? -1 : s > 1 ? 1 : s;
+      out[n++] = s < 0 ? s * 32768 : s * 32767;
+      pos += ratio;
+    }
+    // Carrega o resto fracionário para o próximo bloco (continuidade de fase).
+    this._readPos = pos - len;
+    this._filled = 0;
+    if (n === 0) return;
+    const pcm = new Int16Array(out.subarray(0, n));
+    this.port.postMessage({ type: 'audio', pcm: pcm.buffer }, [pcm.buffer]);
+  }
+
   process(inputs) {
     if (this._paused) return true;
     const input = inputs[0];
-    if (input && input[0] && input[0].length > 0) {
-      this.port.postMessage({ type: 'audio', buffer: new Float32Array(input[0]) });
+    const ch = input && input[0];
+    if (!ch || ch.length === 0) return true;
+    let offset = 0;
+    while (offset < ch.length) {
+      const room = BLOCK - this._filled;
+      const take = Math.min(room, ch.length - offset);
+      this._buf.set(ch.subarray(offset, offset + take), this._filled);
+      this._filled += take;
+      offset += take;
+      if (this._filled === BLOCK) this._flush();
     }
     return true;
   }
@@ -104,10 +193,19 @@ function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: n
 }
 
 export function useSoniox(opts: UseSonioxOptions): UseSonioxReturn {
-  const { enabled, captureFromMic, externalStreams, paused = false, audioConstraints } = opts;
+  const {
+    enabled,
+    captureFromMic,
+    externalStreams,
+    paused = false,
+    audioConstraints,
+    vuMeter = true,
+  } = opts;
 
   const [transcript, setTranscript] = useState<SonioxToken[]>([]);
   const transcriptRef = useRef<SonioxToken[]>([]);
+  /** Contador monotônico para gerar `id` estável de segmento. */
+  const segmentSeqRef = useRef(0);
   const [liveText, setLiveText] = useState("");
   const [liveSpeaker, setLiveSpeaker] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -160,8 +258,18 @@ export function useSoniox(opts: UseSonioxOptions): UseSonioxReturn {
           setTranscript((prev) => {
             const last = prev[prev.length - 1];
             const next = last && last.speaker === speakerLabel
+              // Continuação do mesmo falante: mantém o MESMO `id` — o React reconcilia
+              // só o texto desse nó, sem remontar a lista.
               ? [...prev.slice(0, -1), { ...last, text: last.text + finalText }]
-              : [...prev, { speaker: speakerLabel, text: finalText.trim(), timestamp: Date.now() }];
+              : [
+                  ...prev,
+                  {
+                    id: `${Date.now().toString(36)}-${segmentSeqRef.current++}`,
+                    speaker: speakerLabel,
+                    text: finalText.trim(),
+                    timestamp: Date.now(),
+                  },
+                ];
             transcriptRef.current = next;
             return next;
           });
@@ -306,10 +414,10 @@ export function useSoniox(opts: UseSonioxOptions): UseSonioxReturn {
         const ws = await connectWS(apiKey);
         wsRef.current = ws;
 
-        const sendChunk = (float32: Float32Array) => {
+        /** Envia PCM 16 kHz s16le já pronto. Não faz trabalho de DSP na main thread. */
+        const sendPcm = (pcm: ArrayBuffer) => {
           if (wsRef.current?.readyState !== WebSocket.OPEN || pausedRef.current) return;
-          const downsampled = downsampleBuffer(float32, nativeRate, 16000);
-          wsRef.current.send(downsampled.buffer as ArrayBuffer);
+          wsRef.current.send(pcm);
         };
 
         let usingWorklet = false;
@@ -320,8 +428,10 @@ export function useSoniox(opts: UseSonioxOptions): UseSonioxReturn {
             URL.revokeObjectURL(url);
             const node = new AudioWorkletNode(ctx, "recorder-processor");
             workletNodeRef.current = node;
+            // ~10 mensagens/s (blocos de ~100 ms), já em Int16 16 kHz e transferidas
+            // (sem clone). A main thread só repassa o ArrayBuffer para o WebSocket.
             node.port.onmessage = (e) => {
-              if (e.data.type === "audio") sendChunk(e.data.buffer);
+              if (e.data?.type === "audio") sendPcm(e.data.pcm as ArrayBuffer);
             };
             mixSource.connect(node);
             node.connect(ctx.destination);
@@ -331,23 +441,40 @@ export function useSoniox(opts: UseSonioxOptions): UseSonioxReturn {
           }
         }
 
+        // FALLBACK — só entra quando o AudioWorklet realmente falhou: ou o browser não
+        // expõe AudioWorkletNode/ctx.audioWorklet, ou addModule()/new AudioWorkletNode()
+        // lançou (o catch acima deixa `usingWorklet = false`). Em qualquer caminho de
+        // sucesso do worklet, `usingWorklet` é true e este bloco não roda.
+        // ScriptProcessorNode é API depreciada e roda NA MAIN THREAD por definição —
+        // por isso aqui (e só aqui) o downsample volta a custar main thread.
         if (!usingWorklet) {
           const processor = ctx.createScriptProcessor(4096, 1, 1);
           processorRef.current = processor;
           processor.onaudioprocess = (e) => {
-            sendChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+            if (wsRef.current?.readyState !== WebSocket.OPEN || pausedRef.current) return;
+            const pcm = downsampleBuffer(
+              e.inputBuffer.getChannelData(0),
+              nativeRate,
+              OUTPUT_SAMPLE_RATE,
+            );
+            sendPcm(pcm.buffer as ArrayBuffer);
           };
           mixSource.connect(processor);
           processor.connect(ctx.destination);
         }
 
-        const vuData = new Uint8Array(analyser.frequencyBinCount);
-        vuTimerRef.current = setInterval(() => {
-          if (!analyserRef.current) return;
-          analyserRef.current.getByteFrequencyData(vuData);
-          const avg = vuData.reduce((s, v) => s + v, 0) / vuData.length;
-          setAudioLevel(Math.round((avg / 255) * 100));
-        }, 100);
+        // VU meter: 10 setState/s. Só liga quando o consumidor pede (`vuMeter`),
+        // porque cada tick re-renderiza o componente que chama o hook — em telas
+        // que não desenham o medidor isso é re-render puro desperdiçado.
+        if (vuMeter) {
+          const vuData = new Uint8Array(analyser.frequencyBinCount);
+          vuTimerRef.current = setInterval(() => {
+            if (!analyserRef.current) return;
+            analyserRef.current.getByteFrequencyData(vuData);
+            const avg = vuData.reduce((s, v) => s + v, 0) / vuData.length;
+            setAudioLevel(Math.round((avg / 255) * 100));
+          }, 100);
+        }
       } catch (err: any) {
         console.error("[useSoniox] Erro start:", err);
         if (err.name === "NotAllowedError") {

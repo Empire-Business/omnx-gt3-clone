@@ -23,8 +23,6 @@ import { AvatarBadge } from "@/components/shared/SharedComponents";
 import { cn } from "@/lib/utils";
 import "@livekit/components-styles";
 
-const LIVEKIT_URL = (import.meta.env.VITE_LIVEKIT_URL as string) || "";
-
 export default function ChatHuddle() {
   const { channelId } = useParams<{ channelId: string }>();
   const navigate = useNavigate();
@@ -80,7 +78,7 @@ export default function ChatHuddle() {
   return (
     <LiveKitRoom
       token={tokenData.token}
-      serverUrl={tokenData.serverUrl || LIVEKIT_URL}
+      serverUrl={tokenData.url}
       connect
       audio={true}
       video={false}
@@ -137,7 +135,19 @@ function HuddleUI({
 
   useEffect(() => {
     if (!localParticipant) return;
-    localParticipant.setScreenShareEnabled(screenOn).catch(() => {});
+    // O 2º argumento (ScreenShareCaptureOptions) é o que faz o navegador
+    // OFERECER a caixa "Compartilhar áudio da guia". Sem ele o LiveKit pede
+    // getDisplayMedia({ audio: false }) e a tela compartilhada chega muda
+    // para os outros participantes.
+    localParticipant
+      .setScreenShareEnabled(screenOn, {
+        audio: true,
+        selfBrowserSurface: "include",
+        systemAudio: "include",
+        surfaceSwitching: "include",
+        suppressLocalAudioPlayback: false,
+      })
+      .catch(() => {});
   }, [localParticipant, screenOn]);
 
   const totalParticipants = participants.length;

@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Button } from "@/components/ui/button";
 import { AvatarBadge } from "@/components/shared/SharedComponents";
+import { BirthdayBoard } from "@/components/shared/BirthdayBoard";
 import { parseDateSafe, isTaskOverdue } from "@/lib/date-utils";
 import { format, isToday, isThisWeek, isValid, formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -257,6 +258,10 @@ export default function Dashboard() {
             : `Você tem ${stats.inProgressTasks} tarefas em execução.`}
         </p>
       </div>
+
+      {/* Quadro de aniversariantes — só aparece quando há alguém hoje ou nos
+          próximos 7 dias; fora disso não ocupa espaço nenhum. */}
+      <BirthdayBoard />
 
       {/* Stats — 4 KPI cards flat */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

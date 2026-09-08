@@ -20,6 +20,7 @@ import {
   UserCog,
   Library,
   Megaphone,
+  PartyPopper,
   Rss,
   MessageSquare,
   PanelLeftClose,
@@ -33,14 +34,15 @@ import {
   Check,
   Lock,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useFeedUnreadCount } from "@/hooks/useFeed";
 import { useTasksUnreadCount } from "@/hooks/useNotifications";
-import { useChatUnread } from "@/hooks/useChat";
+import { useChatUnreadTotal } from "@/hooks/useChat";
 import { useProjects } from "@/hooks/useProjects";
-import { useTasks } from "@/hooks/useTasks";
 import { useEmployees } from "@/hooks/useEmployees";
 import { useIntegrations, type FeatureKey } from "@/hooks/useIntegrations";
 import { useTheme } from "@/hooks/useTheme";
@@ -90,6 +92,7 @@ const navItems: { section: string; items: NavItem[] }[] = [
     items: [
       { label: "Feed", icon: Rss, to: "/feed" },
       { label: "Reuniões", icon: Video, to: "/reunioes", feature: "meetings" },
+      { label: "Eventos", icon: PartyPopper, to: "/eventos" },
       { label: "Comunicados", icon: Megaphone, to: "/comunicados" },
     ],
   },
@@ -105,6 +108,18 @@ const navItems: { section: string; items: NavItem[] }[] = [
     ],
   },
 ];
+
+/** Recorte mínimo do PostgrestFilterBuilder para filtrar por uma coluna que
+ *  ainda não existe em `types.ts` (`parent_task_id`), sem recorrer a `any`. */
+interface OpenTaskCountFilter {
+  is(
+    column: string,
+    value: null
+  ): PromiseLike<{
+    data: { project_id: string | null }[] | null;
+    error: { message: string } | null;
+  }>;
+}
 
 interface AppSidebarProps {
   onNavigate?: () => void;
@@ -129,38 +144,92 @@ export function AppSidebar({ onNavigate, tenant }: AppSidebarProps) {
     Object.fromEntries(navItems.map((g) => [g.section, true]))
   );
   const { signOut, user, profile } = useAuth();
+  const tenantId = profile?.tenant_id;
   const { isAdmin, isManager, loading: permissionsLoading } = usePermissions();
   const { isActive: isFeatureActive } = useIntegrations();
   const { count: feedUnread } = useFeedUnreadCount();
   const { count: tasksUnread } = useTasksUnreadCount();
-  const { data: unreadMap } = useChatUnread();
-  const chatUnread = unreadMap ? [...unreadMap.values()].reduce((a, b) => a + b, 0) : 0;
+  const chatUnread = useChatUnreadTotal(); // já exclui conversas silenciadas
   const { theme, toggleTheme } = useTheme();
   const { data: projectsData } = useProjects();
-  const { data: tasksData } = useTasks();
+  // ATENÇÃO: este `useEmployees()` JÁ NÃO É de graça. Até 2026-08-31 o
+  // `usePermissions()` (acima) montava a mesma query e o React Query deduplicava
+  // pela queryKey — o comentário antigo dizia isso e estava certo na época.
+  // Agora o `usePermissions` busca só a própria linha (`id, is_ceo`), porque
+  // carregar os 39 colaboradores do tenant com os subselects de contagem da
+  // `organograma_view` para ler UM booleano era custo global: o hook é usado em
+  // 25+ arquivos.
+  // Consequência: a lista inteira volta a custar 4 requisições, e aqui ela serve
+  // só para achar o próprio `employee_id`. Trocar por `usePermissions().myEmployeeId`
+  // (já exposto) elimina isso — a única diferença é que ele resolve apenas para
+  // colaborador ATIVO, então precisa de uma conferida nos fluxos antes.
   const { data: employeesData } = useEmployees();
   const myEmployeeId = (employeesData || []).find((e) => e.user_id === user?.id)?.id ?? null;
   const projectsCanManage = isAdmin || isManager;
-  const recentProjects = (projectsData || [])
-    .filter((p) => p.status === "active" || p.status === "planning")
-    .filter((p) => {
-      // Admin/manager veem todos; demais veem só os que participam
-      if (projectsCanManage) return true;
-      if (!myEmployeeId) return false;
-      const isMember = (p.members || []).some((m) => m.employee_id === myEmployeeId);
-      const isOwner = (p as any).created_by === user?.id;
-      return isMember || isOwner;
-    })
-    .sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime())
-    .slice(0, 6);
-  const projectTaskCounts = ((): Record<string, number> => {
-    const out: Record<string, number> = {};
-    for (const t of tasksData || []) {
-      if (!t.project_id || t.status === "done") continue;
-      out[t.project_id] = (out[t.project_id] || 0) + 1;
-    }
-    return out;
-  })();
+  const recentProjects = useMemo(
+    () =>
+      (projectsData || [])
+        .filter((p) => p.status === "active" || p.status === "planning")
+        .filter((p) => {
+          // Admin/manager veem todos; demais veem só os que participam
+          if (projectsCanManage) return true;
+          if (!myEmployeeId) return false;
+          const isMember = (p.members || []).some((m) => m.employee_id === myEmployeeId);
+          const isOwner = p.created_by === user?.id;
+          return isMember || isOwner;
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.updated_at || b.created_at || 0).getTime() -
+            new Date(a.updated_at || a.created_at || 0).getTime()
+        )
+        .slice(0, 6),
+    [projectsData, projectsCanManage, myEmployeeId, user?.id]
+  );
+  const recentProjectIds = useMemo(
+    () => recentProjects.map((p) => p.id),
+    [recentProjects]
+  );
+
+  // Contagem de tarefas abertas por projeto exibido na sidebar.
+  //
+  // Antes isto vinha de `useTasks()`, que baixa TODAS as tarefas do tenant e
+  // ainda dispara 4 buscas de hidratação em batch (organograma_view, projects,
+  // task_assignees, task_recurrence) — cinco requisições e um payload grande,
+  // em toda página, só para somar um número ao lado de no máximo 6 projetos.
+  // É o mesmo erro estrutural corrigido na v8.35.0.
+  //
+  // Agora: uma única requisição, uma coluna, restrita aos projetos visíveis e
+  // já filtrada no servidor com os MESMOS critérios de antes (não concluída e
+  // sem subtarefas), então o número exibido continua idêntico.
+  const { data: projectTaskCounts } = useQuery({
+    // Prefixo ["tasks", tenantId, ...] de propósito: todas as mutações de
+    // tarefa já invalidam `["tasks", tenantId]`, então o contador continua
+    // atualizando na hora ao criar/mover/concluir uma tarefa — exatamente como
+    // acontecia quando ele vinha de `useTasks()`.
+    queryKey: ["tasks", tenantId, "sidebar-open-counts", recentProjectIds],
+    enabled: !!tenantId && recentProjectIds.length > 0,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const builder = supabase
+        .from("tasks")
+        .select("project_id")
+        .eq("tenant_id", tenantId!)
+        .in("project_id", recentProjectIds)
+        .neq("status", "done");
+      // `parent_task_id` ainda não existe em types.ts (gerado antes da coluna),
+      // então o filtro final passa por uma interface mínima em vez de `any`.
+      const { data, error } = await (
+        builder as unknown as OpenTaskCountFilter
+      ).is("parent_task_id", null);
+      if (error) throw error;
+      const out: Record<string, number> = {};
+      for (const t of data || []) {
+        if (t.project_id) out[t.project_id] = (out[t.project_id] || 0) + 1;
+      }
+      return out;
+    },
+  });
 
   const isActive = (to: string) => {
     if (to === "/dashboard") return location.pathname === "/dashboard" || location.pathname === "/";
@@ -217,8 +286,10 @@ export function AppSidebar({ onNavigate, tenant }: AppSidebarProps) {
         {/* Faixa de marca OMNX */}
         <div
           className={cn(
-            "flex items-center justify-center pt-3.5 pb-3",
-            collapsed ? "px-2" : "px-3"
+            "flex items-center pt-3.5 pb-3",
+            // Recolhida: centralizada (a faixa é estreita). Expandida: alinhada
+            // à esquerda, acompanhando o alinhamento dos itens do menu.
+            collapsed ? "justify-center px-2" : "justify-start px-3"
           )}
         >
           <OmnxLockup height={collapsed ? 24 : 32} showWord={false} />
@@ -464,7 +535,7 @@ export function AppSidebar({ onNavigate, tenant }: AppSidebarProps) {
                       <ul className="flex flex-col gap-px">
                         {recentProjects.map((p) => {
                           const active = location.pathname === `/projetos/${p.id}`;
-                          const taskCount = projectTaskCounts[p.id] || 0;
+                          const taskCount = projectTaskCounts?.[p.id] || 0;
                           return (
                             <li key={p.id}>
                               <Link
@@ -576,14 +647,15 @@ export function AppSidebar({ onNavigate, tenant }: AppSidebarProps) {
               <DropdownMenuItem onClick={() => navigate("/perfil")} className="cursor-pointer">
                 <User className="w-3.5 h-3.5 mr-2" /> Meu perfil
               </DropdownMenuItem>
-              {isAdmin && (
-                <DropdownMenuItem
-                  onClick={() => navigate("/configuracoes")}
-                  className="cursor-pointer"
-                >
-                  <Settings className="w-3.5 h-3.5 mr-2" /> Configurações
-                </DropdownMenuItem>
-              )}
+              {/* Aberto a todos: a aba "Notificações" de /configuracoes é do
+                  usuário, não de admin. As abas administrativas seguem
+                  condicionadas ao papel dentro da própria página. */}
+              <DropdownMenuItem
+                onClick={() => navigate("/configuracoes")}
+                className="cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5 mr-2" /> Configurações
+              </DropdownMenuItem>
               {isAdmin && (
                 <DropdownMenuItem
                   onClick={() => navigate("/configuracoes/usuarios")}

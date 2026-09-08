@@ -19,10 +19,10 @@ export const BRAND = {
   tagline: "Plataforma visual para gestão de times, projetos e processos.",
 
   /** Caminho do logo (PNG/SVG dentro de /public). */
-  logo: "/logo.png",
+  logo: "/omnx-logo-dark.png",
 
   /** Favicon (ícone da aba) — chip OMNX com wordmark empilhada OM/NX (arte real). */
-  favicon: "/favicon-omnx.png?v=5",
+  favicon: "/favicon-omnx.png?v=6",
 
   /**
    * Cor da marca em HSL ("H S% L%" — sem o `hsl()` em volta).

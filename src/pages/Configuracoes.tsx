@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Shield, Users, Crown, Briefcase, User, Palette, Upload, Image, Webhook, Plus, Trash2, Check, X, Globe, Key, Activity, Building2, Code, Send, RefreshCw, ChevronDown, ChevronRight, ExternalLink, Copy, Plug } from "lucide-react";
+import { Shield, Users, Crown, Briefcase, User, Palette, Upload, Image, Webhook, Plus, Trash2, Check, X, Globe, Key, Activity, Building2, Code, Send, RefreshCw, ChevronDown, ChevronRight, ExternalLink, Copy, Plug, Bell } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -7,6 +7,8 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useEmployees } from "@/hooks/useEmployees";
 import { useWebhooks, WEBHOOK_EVENTS } from "@/hooks/useWebhooks";
 import { IntegrationsCard } from "@/components/settings/IntegrationsCard";
+import { NotificationPreferences } from "@/components/settings/NotificationPreferences";
+import { cn } from "@/lib/utils";
 import { AvatarBadge } from "@/components/shared/SharedComponents";
 import { WebhookLogs, WebhookTester } from "@/components/shared/WebhookLogs";
 import { useNavigate } from "react-router-dom";
@@ -91,7 +93,7 @@ export default function Configuracoes() {
     onError: (e: any) => toast.error(e.message),
   });
 
-  if (permLoading || isLoading) {
+  if (permLoading || (isAdmin && isLoading)) {
     return (
       <div className="flex flex-col gap-6">
         <h1 className="text-h1 font-bold text-foreground">Configurações</h1>
@@ -102,29 +104,36 @@ export default function Configuracoes() {
     );
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="flex flex-col gap-6">
-        <h1 className="text-h1 font-bold text-foreground">Configurações</h1>
-        <p className="text-sm text-muted-foreground">Apenas administradores podem acessar esta página.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-h1 font-bold text-foreground">Configurações</h1>
 
-      <Tabs defaultValue="branding" className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
-          <TabsTrigger value="branding" className="text-xs sm:text-sm"><Palette className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Marca</TabsTrigger>
-          <TabsTrigger value="roles" className="text-xs sm:text-sm"><Shield className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Permissões</TabsTrigger>
-          <TabsTrigger value="integracoes" className="text-xs sm:text-sm"><Plug className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Integrações</TabsTrigger>
-          <TabsTrigger value="webhooks" className="text-xs sm:text-sm"><Webhook className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Webhooks</TabsTrigger>
-          <TabsTrigger value="api" className="text-xs sm:text-sm"><Code className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />API</TabsTrigger>
-          <TabsTrigger value="tenants" className="text-xs sm:text-sm"><Building2 className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Tenants</TabsTrigger>
+      {/* A aba "Notificações" é a única aberta a todos os usuários — as demais
+          são de administração do tenant. Antes a página inteira era bloqueada
+          para não-admins, então um member não tinha onde ajustar seus alertas. */}
+      <Tabs defaultValue="notificacoes" className="w-full">
+        <TabsList
+          className={cn(
+            "grid w-full",
+            isAdmin ? "grid-cols-4 sm:grid-cols-7" : "grid-cols-1",
+          )}
+        >
+          <TabsTrigger value="notificacoes" className="text-xs sm:text-sm"><Bell className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Notificações</TabsTrigger>
+          {isAdmin && <>
+            <TabsTrigger value="branding" className="text-xs sm:text-sm"><Palette className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Marca</TabsTrigger>
+            <TabsTrigger value="roles" className="text-xs sm:text-sm"><Shield className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Permissões</TabsTrigger>
+            <TabsTrigger value="integracoes" className="text-xs sm:text-sm"><Plug className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Integrações</TabsTrigger>
+            <TabsTrigger value="webhooks" className="text-xs sm:text-sm"><Webhook className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Webhooks</TabsTrigger>
+            <TabsTrigger value="api" className="text-xs sm:text-sm"><Code className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />API</TabsTrigger>
+            <TabsTrigger value="tenants" className="text-xs sm:text-sm"><Building2 className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />Tenants</TabsTrigger>
+          </>}
         </TabsList>
 
+        <TabsContent value="notificacoes" className="mt-4">
+          <NotificationPreferences />
+        </TabsContent>
+
+        {isAdmin && <>
         <TabsContent value="branding" className="mt-4">
           <TenantBrandingCard />
         </TabsContent>
@@ -191,6 +200,7 @@ export default function Configuracoes() {
         <TabsContent value="tenants" className="mt-4">
           <CreateTenantCard />
         </TabsContent>
+        </>}
       </Tabs>
     </div>
   );

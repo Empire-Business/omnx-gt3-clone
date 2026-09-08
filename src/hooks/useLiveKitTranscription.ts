@@ -85,6 +85,10 @@ export function useLiveKitTranscription(
     enabled,
     captureFromMic: false,
     externalStreams: streamsRef,
+    // Nenhuma UI da sala desenha o medidor de volume da transcrição. Ligado, ele
+    // custava um setInterval(100ms) → ~10 re-renders/s no componente consumidor
+    // durante a reunião inteira, sem nada na tela mudando.
+    vuMeter: false,
   });
 
   // Mantém uma ref sempre atualizada com a transcrição mais recente —
@@ -94,12 +98,46 @@ export function useLiveKitTranscription(
     latestTranscriptRef.current = soniox.transcript;
   }, [soniox.transcript]);
 
+  /**
+   * Marcador de "o pipeline chegou a rodar nesta reunião", gravado uma única vez
+   * assim que a captura fica ativa — ANTES de existir qualquer palavra.
+   *
+   * Sem ele, uma reunião cujo pipeline nunca subiu (sala sem host) e uma cujo
+   * pipeline rodou mas não captou áudio (todos mudos, mic sem permissão) ficavam
+   * as duas com `transcript_raw = NULL` e `soniox_session_id = NULL` — estados
+   * indistinguíveis no banco, e portanto impossíveis de diagnosticar depois.
+   */
+  const markerWrittenRef = useRef(false);
+
   // Salva o estado atual no banco (idempotente, escopado por meeting).
   const saveNow = useRef<(reason?: string) => Promise<void>>(async () => {});
   saveNow.current = async (reason = "tick") => {
     if (!meetingId) return;
     const list = latestTranscriptRef.current;
-    if (!list || list.length === 0) return;
+    const isEmpty = !list || list.length === 0;
+
+    // Ainda sem falas: grava só o marcador de sessão, uma vez. Nunca sobrescreve
+    // `transcript_raw` com vazio — um retorno tardio de token não pode apagar o
+    // que já foi salvo.
+    if (isEmpty) {
+      if (markerWrittenRef.current) return;
+      markerWrittenRef.current = true;
+      try {
+        const { error } = await supabase
+          .from("meetings")
+          .update({ soniox_session_id: "livekit-realtime" })
+          .eq("id", meetingId);
+        if (error) {
+          markerWrittenRef.current = false; // permite nova tentativa no próximo tick
+          console.warn(`[useLiveKitTranscription] marker (${reason}) erro:`, error);
+        }
+      } catch (err) {
+        markerWrittenRef.current = false;
+        console.warn(`[useLiveKitTranscription] marker (${reason}) falhou:`, err);
+      }
+      return;
+    }
+
     const full = formatTranscript(list);
     try {
       const { error } = await supabase
@@ -108,6 +146,8 @@ export function useLiveKitTranscription(
         .eq("id", meetingId);
       if (error) {
         console.warn(`[useLiveKitTranscription] save (${reason}) erro:`, error);
+      } else {
+        markerWrittenRef.current = true;
       }
     } catch (err) {
       console.warn(`[useLiveKitTranscription] save (${reason}) falhou:`, err);
@@ -117,6 +157,10 @@ export function useLiveKitTranscription(
   // Auto-save com intervalo ESTÁVEL (não recriado a cada token).
   useEffect(() => {
     if (!meetingId || !enabled) return;
+    markerWrittenRef.current = false;
+    // Marca a sessão imediatamente — não espera 10s pelo primeiro tick, porque
+    // uma sala encerrada antes disso não deixaria rastro nenhum.
+    void saveNow.current("start");
     const id = setInterval(() => {
       void saveNow.current("interval");
     }, SAVE_INTERVAL_MS);

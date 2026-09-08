@@ -12,7 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Camera, Save, Shield, Lock, Cake } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { normalizeSupabaseAssetUrl } from "@/integrations/supabase/config";
-import { NotificationSettings } from "@/components/shared/NotificationSettings";
+import { NotificationPreferences } from "@/components/settings/NotificationPreferences";
+import { isBirthdayOn } from "@/hooks/useBirthdays";
 
 export default function Perfil() {
   const { user, profile, updatePassword } = useAuth();
@@ -155,11 +156,27 @@ export default function Perfil() {
             <div>
               <p className="font-semibold text-foreground">{profile?.full_name || "Usuário"}</p>
               <p className="text-sm text-muted-foreground">{user?.email}</p>
-              <div className="flex items-center gap-1 mt-1">
-                <Shield className="w-3 h-3 text-primary" />
-                <Badge variant="secondary" className="text-xs">
-                  {roleLabels[role || "member"] || role}
-                </Badge>
+              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                <span className="flex items-center gap-1">
+                  <Shield className="w-3 h-3 text-primary" />
+                  <Badge variant="secondary" className="text-xs">
+                    {roleLabels[role || "member"] || role}
+                  </Badge>
+                </span>
+                {/* Aniversário no cabeçalho — é a confirmação visual de que a
+                    data capturada no primeiro acesso entrou mesmo no cadastro.
+                    Dia e mês apenas; o ano nunca aparece. */}
+                {birthDate && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <Cake className="w-3 h-3 text-primary" />
+                    {birthDate.slice(8, 10)}/{birthDate.slice(5, 7)}
+                    {isBirthdayOn(birthDate) && (
+                      <span className="ml-0.5 font-semibold text-amber-600 dark:text-amber-400">
+                        🎉 hoje!
+                      </span>
+                    )}
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
@@ -176,7 +193,8 @@ export default function Perfil() {
               </Label>
               <Input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} className="w-full sm:w-auto" />
               <p className="text-xs text-muted-foreground">
-                No seu aniversário, aparece um 🎉 no seu card no chat. O ano não é exibido.
+                No seu dia, você aparece no quadro de aniversariantes do Início e sobe para o topo
+                da lista de conversas do time. O ano nunca é exibido — só dia e mês.
               </p>
             </div>
             <div className="space-y-2">
@@ -192,8 +210,9 @@ export default function Perfil() {
         </CardContent>
       </Card>
 
-      {/* Notificações (push no mobile, som no desktop) */}
-      <NotificationSettings />
+      {/* Notificações — mesmo painel da aba "Notificações" em /configuracoes,
+          reaproveitado aqui como atalho (push, som e silenciamento). */}
+      <NotificationPreferences />
 
       {/* Change Password */}
       <Card>

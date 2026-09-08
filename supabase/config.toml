@@ -62,3 +62,20 @@ verify_jwt = false
 
 [functions.livekit-guest-status]
 verify_jwt = false
+
+[functions.notify-upcoming-events]
+verify_jwt = false
+
+[functions.system-bot-notify]
+verify_jwt = false
+
+# task-voice-ai é chamada pelo NAVEGADOR com a sessão do usuário, então exige
+# JWT válido de verdade — ao contrário das de cima, que são webhooks/cron e se
+# autenticam por segredo próprio no corpo do handler.
+#
+# Declarada aqui de propósito, em 2026-08-31: ela NÃO constava neste arquivo, e
+# um redeploy externo (Lovable) rebaixou o verify_jwt dela de true para false
+# sem ninguém pedir. Com a entrada explícita, qualquer deploy futuro reimpõe o
+# valor certo.
+[functions.task-voice-ai]
+verify_jwt = true

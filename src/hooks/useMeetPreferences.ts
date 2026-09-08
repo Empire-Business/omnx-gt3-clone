@@ -6,7 +6,8 @@
  * - backgroundType / backgroundImageUrl: fundo virtual
  *   • backgroundImageUrl pode ser "preset:<id>" (estável entre builds), uma
  *     URL externa (Unsplash) ou um data URL (upload do usuário). v8.10.4
- * - liveTranscriptionEnabled: transcrição ao vivo via Soniox
+ * - liveTranscriptionEnabled: EXIBIÇÃO do painel de legendas ao vivo (default false).
+ *   Não controla a captura/gravação da transcrição — essa roda para o host sempre.
  * - audioInputDeviceId / videoInputDeviceId / audioOutputDeviceId: devices
  *   selecionados pelo usuário (persistidos para reaplicar em sessões futuras). v8.10.3
  * - displayName: nome exibido na PreJoin (lembrado entre sessões). v8.10.4
@@ -51,6 +52,9 @@ const DEFAULTS: MeetPreferences = {
   backgroundType: "none",
   backgroundImageUrl: null,
   backgroundQuality: "standard",
+  // v8.36.1: legendas ao vivo NASCEM DESLIGADAS. A preferência controla apenas a
+  // exibição do painel de legendas — a gravação da transcrição (que alimenta a
+  // meeting-ai) continua rodando para o host independentemente dela.
   liveTranscriptionEnabled: false,
   audioInputDeviceId: null,
   videoInputDeviceId: null,

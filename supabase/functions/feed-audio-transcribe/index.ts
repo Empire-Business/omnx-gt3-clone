@@ -16,11 +16,13 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// Modelos que aceitam input_audio. Tentamos em ordem.
+// Modelos que aceitam input_audio HOJE no OpenRouter. Tentamos em ordem.
+// Conferir em https://openrouter.ai/api/v1/models antes de mexer: IDs saem do
+// ar sem aviso.
 const MODELS = [
+  "google/gemini-3.5-flash",
   "google/gemini-2.5-flash",
-  "google/gemini-2.0-flash-001",
-  "openai/gpt-4o-audio-preview",
+  "openai/gpt-audio",
 ];
 
 function jsonResponse(body: unknown, status = 200) {

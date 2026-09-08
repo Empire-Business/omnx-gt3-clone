@@ -22,6 +22,8 @@ import {
   MoreVertical,
   Maximize2,
   Minimize2,
+  Users,
+  Circle,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -58,8 +60,20 @@ interface MeetControlBarProps {
   onToggleChat: () => void;
   onEndForAll: () => void;
   endingForAll: boolean;
-  isFullscreen: boolean;
-  onToggleFullscreen: () => void;
+  /**
+   * Fullscreen é OPCIONAL: a página do convidado (MeetGuest) não passa esses
+   * props. Enquanto eram obrigatórios o botão renderizava com onClick
+   * `undefined` — botão morto em runtime (o `npm run build` não pega porque
+   * roda vite sem tsc). Sem `onToggleFullscreen`, não renderizamos o botão.
+   */
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+  showParticipants?: boolean;
+  onToggleParticipants?: () => void;
+  participantCount?: number;
+  isRecording?: boolean;
+  /** Mensagens de conversa recebidas com o painel fechado (badge do botão). */
+  unreadChatCount?: number;
 }
 
 export function MeetControlBar({
@@ -69,13 +83,21 @@ export function MeetControlBar({
   onToggleChat,
   onEndForAll,
   endingForAll,
-  isFullscreen,
+  isFullscreen = false,
   onToggleFullscreen,
+  showParticipants = false,
+  onToggleParticipants,
+  participantCount,
+  isRecording = false,
+  unreadChatCount = 0,
 }: MeetControlBarProps) {
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
 
   return (
     <TooltipProvider delayDuration={300}>
+      {/* bg-black é intencional (superfície de mídia): a barra continua o
+          palco de vídeo preto do MeetRoom/MeetGuest, não a superfície do tema.
+          Todo o resto usa tokens semânticos. */}
       <div className="w-full flex justify-center px-2 sm:px-4 py-2 sm:py-3 bg-black">
         <div
           className={cn(
@@ -86,18 +108,51 @@ export function MeetControlBar({
         >
           <MicToggle />
           <CamToggle />
-          {/* Screen share esconde em mobile (raramente usado em telefone) */}
-          <span className="hidden sm:inline-flex"><ScreenShareToggle /></span>
+          {/* Antes o botão era `hidden sm:inline-flex` e simplesmente sumia no
+              celular, sem explicação — mas há mobile que compartilha tela
+              (Chrome/Android) e quem não tem suporte (iOS Safari, sem
+              getDisplayMedia) merecia um motivo, não um botão fantasma.
+              O próprio ScreenShareToggle detecta o suporte e se desabilita. */}
+          <ScreenShareToggle />
 
           <div className="mx-1 h-8 w-px bg-border/60 hidden sm:block" aria-hidden />
 
+          {/* O badge é só visual (aria-hidden) — quem usa leitor de tela
+              precisa da contagem no próprio nome do botão. */}
           <CircleAction
-            label={showChat ? "Fechar conversa" : "Abrir conversa"}
+            label={
+              showChat
+                ? "Fechar conversa"
+                : unreadChatCount > 0
+                  ? `Abrir conversa, ${unreadChatCount} ${
+                      unreadChatCount === 1 ? "mensagem não lida" : "mensagens não lidas"
+                    }`
+                  : "Abrir conversa"
+            }
             onClick={onToggleChat}
             active={showChat}
+            badge={showChat ? undefined : unreadChatCount}
           >
             <MessageSquare className="w-5 h-5" />
           </CircleAction>
+
+          {/* Participantes — SEM `hidden sm:inline-flex`: saber quem está na
+              call é essencial justamente no celular, onde o palco mostra
+              poucos tiles. */}
+          {onToggleParticipants && (
+            <CircleAction
+              label={
+                showParticipants
+                  ? "Fechar lista de participantes"
+                  : `Participantes${participantCount ? ` (${participantCount})` : ""}`
+              }
+              onClick={onToggleParticipants}
+              active={showParticipants}
+              badge={participantCount}
+            >
+              <Users className="w-5 h-5" />
+            </CircleAction>
+          )}
 
           {/* Controles secundários — escalonados por breakpoint pra evitar
               overflow da barra. Volume entra cedo (sm+) porque é ajuste comum
@@ -107,14 +162,32 @@ export function MeetControlBar({
           <span className="hidden lg:inline-flex"><VirtualBackgroundControl /></span>
           <span className="hidden lg:inline-flex"><DeviceSelector /></span>
 
-          <span className="hidden md:inline-flex">
-            <CircleAction
-              label={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
-              onClick={onToggleFullscreen}
+          {/* Só renderiza se o pai realmente souber alternar tela cheia. */}
+          {onToggleFullscreen && (
+            <span className="hidden md:inline-flex">
+              <CircleAction
+                label={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+                onClick={onToggleFullscreen}
+              >
+                {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+              </CircleAction>
+            </span>
+          )}
+
+          {/* Indicador de gravação — texto + ícone (nunca só cor). */}
+          {isRecording && (
+            <span
+              role="status"
+              aria-label="Reunião sendo gravada"
+              className={cn(
+                "hidden sm:inline-flex items-center gap-1.5 h-8 px-2.5 rounded-full",
+                "bg-destructive/15 text-destructive text-xs font-medium",
+              )}
             >
-              {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
-            </CircleAction>
-          </span>
+              <Circle className="w-2.5 h-2.5 fill-current animate-pulse" aria-hidden />
+              Gravando
+            </span>
+          )}
 
           <DropdownMenu>
             <Tooltip>
@@ -164,13 +237,12 @@ export function MeetControlBar({
                   <DropdownMenuSeparator />
                 </>
               )}
-              <DropdownMenuLabel>Atalhos</DropdownMenuLabel>
-              <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                M — silenciar microfone
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                V — desligar câmera
-              </DropdownMenuItem>
+              {/* Rodapé informativo (não é item clicável). Os atalhos são
+                  reais — implementados em useMeetShortcuts.ts. */}
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                Atalhos: <kbd className="font-sans font-medium text-foreground">M</kbd> silencia,{" "}
+                <kbd className="font-sans font-medium text-foreground">V</kbd> desliga a câmera
+              </DropdownMenuLabel>
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -233,9 +305,11 @@ interface CircleProps {
   disabled?: boolean;
   children: React.ReactNode;
   className?: string;
+  /** Contador exibido como badge (ex.: nº de participantes). */
+  badge?: number;
 }
 
-function CircleAction({ label, onClick, active, danger, disabled, children, className }: CircleProps) {
+function CircleAction({ label, onClick, active, danger, disabled, children, className, badge }: CircleProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -245,7 +319,7 @@ function CircleAction({ label, onClick, active, danger, disabled, children, clas
           disabled={disabled}
           aria-label={label}
           className={cn(
-            "h-11 w-11 rounded-full flex items-center justify-center transition-colors",
+            "relative h-11 w-11 rounded-full flex items-center justify-center transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             "disabled:opacity-50 disabled:cursor-not-allowed",
             danger
@@ -257,6 +331,22 @@ function CircleAction({ label, onClick, active, danger, disabled, children, clas
           )}
         >
           {children}
+          {typeof badge === "number" && badge >= 1 && (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full",
+                "flex items-center justify-center text-[10px] font-semibold leading-none",
+                // Quando o botão está ativo ele já é bg-primary — inverte o
+                // badge pra não sumir dentro do próprio botão.
+                active
+                  ? "bg-primary-foreground text-primary"
+                  : "bg-primary text-primary-foreground",
+              )}
+            >
+              {badge > 99 ? "99+" : badge}
+            </span>
+          )}
         </button>
       </TooltipTrigger>
       <TooltipContent side="top">{label}</TooltipContent>
@@ -343,8 +433,44 @@ function CamToggle() {
   );
 }
 
+/**
+ * iOS Safari não implementa getDisplayMedia — clicar só produziria um erro
+ * silencioso. Mesmo teste usado em MeetingRecorder.tsx (áudio do sistema).
+ */
+const SCREEN_SHARE_UNSUPPORTED =
+  "Compartilhar tela: seu navegador não permite (getDisplayMedia indisponível — comum no Safari do iPhone/iPad)";
+
 function ScreenShareToggle() {
-  const { buttonProps, enabled, pending } = useTrackToggle({ source: Track.Source.ScreenShare });
+  const supported = typeof navigator?.mediaDevices?.getDisplayMedia === "function";
+  // `captureOptions` NÃO é opcional na prática: sem ele o LiveKit chama
+  // getDisplayMedia({ audio: false }) e o Chrome nem EXIBE a caixa
+  // "Compartilhar áudio da guia" — a track ScreenShareAudio jamais é criada e
+  // o vídeo compartilhado chega mudo para todo mundo.
+  const { buttonProps, enabled, pending } = useTrackToggle({
+    source: Track.Source.ScreenShare,
+    captureOptions: {
+      audio: true,
+      // Permite escolher a própria guia (é onde o Chrome oferece áudio) e
+      // deixa o áudio da guia continuar saindo nos alto-falantes locais.
+      selfBrowserSurface: "include",
+      systemAudio: "include",
+      surfaceSwitching: "include",
+      suppressLocalAudioPlayback: false,
+    },
+  });
+
+  if (!supported) {
+    return (
+      <TrackCircle
+        buttonProps={{ type: "button", disabled: true, title: SCREEN_SHARE_UNSUPPORTED }}
+        pending={false}
+        label={SCREEN_SHARE_UNSUPPORTED}
+      >
+        <ScreenShareOff className="w-5 h-5" />
+      </TrackCircle>
+    );
+  }
+
   return (
     <TrackCircle
       buttonProps={buttonProps as React.ButtonHTMLAttributes<HTMLButtonElement>}

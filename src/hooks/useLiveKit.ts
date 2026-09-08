@@ -200,7 +200,11 @@ export function useGuestApprovalQueue(roomName: string | undefined) {
     queryKey,
     enabled: !!roomName,
     staleTime: 5 * 1000,
-    refetchInterval: 2500,
+    // O realtime de `meeting_guest_requests` é feito pelo GuestApprovalPanel,
+    // que invalida esta query a cada mudança. O polling aqui é só rede de
+    // segurança para o caso do websocket cair — a 2,5s ele era um segundo
+    // mecanismo redundante batendo no banco 24x por minuto por host.
+    refetchInterval: 60 * 1000,
     queryFn: async (): Promise<GuestRequestRow[]> => {
       const { data, error } = await (supabase as any)
         .from("meeting_guest_requests")
@@ -213,10 +217,9 @@ export function useGuestApprovalQueue(roomName: string | undefined) {
     },
   });
 
-  // Realtime: invalida a query a cada mudança na tabela pra esta sala
-  if (typeof window !== "undefined" && roomName) {
-    // Subscribe is a side-effect; useEffect mais limpo, mas mantemos simples — caller já desmonta com unmount.
-  }
+  // (removido) Havia aqui um bloco `if (typeof window ...) {}` vazio prometendo
+  // um subscribe realtime que nunca foi implementado — código morto. O realtime
+  // real vive no GuestApprovalPanel, que já invalida esta queryKey.
 
   return { ...query, queryKey, invalidate: () => qc.invalidateQueries({ queryKey }) };
 }

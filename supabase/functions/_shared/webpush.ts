@@ -134,7 +134,12 @@ export async function sendWebPush(
 
     const res = await fetch(subscription.endpoint, { method: "POST", headers, body: bodyBuf });
     const ok = res.ok || res.status === 201;
-    const gone = res.status === 404 || res.status === 410;
+    // 404/410 = inscrição removida pelo navegador.
+    // 403 = a assinatura VAPID não corresponde à applicationServerKey com que a
+    // inscrição foi criada (chave antiga). O aparelho só se re-inscreve com a
+    // chave nova quando abre o app; até lá a linha fica no banco falhando para
+    // sempre. Tratar como morta é o certo — o app recria na próxima abertura.
+    const gone = res.status === 404 || res.status === 410 || res.status === 403;
     if (!ok) {
       let respText = "";
       try { respText = (await res.text()).slice(0, 300); } catch { /* ignore */ }
@@ -150,7 +155,7 @@ export async function sendWebPush(
 
 /**
  * Envia o payload para uma lista de subscriptions, com log e coleta de endpoints
- * mortos (404/410) para limpeza pelo chamador.
+ * mortos (404/410/403) para limpeza pelo chamador.
  */
 export async function pushToSubscriptions(
   subs: Array<{ endpoint: string; keys: { p256dh: string; auth: string } }>,

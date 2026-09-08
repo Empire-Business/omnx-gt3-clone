@@ -8,6 +8,8 @@ interface Profile {
   tenant_id: string;
   full_name: string | null;
   avatar_url: string | null;
+  /** `YYYY-MM-DD` — capturada pelo BirthDateGate; o ano nunca é exibido. */
+  birth_date?: string | null;
 }
 
 const LOCALHOST_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);

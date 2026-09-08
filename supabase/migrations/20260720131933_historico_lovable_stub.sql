@@ -1,0 +1,25 @@
+-- ══════════════════════════════════════════════════════════════
+-- MARCADOR DE HISTÓRICO — NÃO CONTÉM SQL, E É DE PROPÓSITO.
+--
+-- A migration 20260720131933 foi aplicada DIRETO no banco de produção
+-- pelo Lovable, sem nunca passar por este repositório (confirmado: o
+-- arquivo jamais existiu em nenhum commit). Ela consta como aplicada em
+-- `supabase_migrations.schema_migrations`, mas não tinha arquivo local.
+--
+-- Isso travava o CLI: `db push` e `migration up` abortam com "Remote
+-- migration versions not found in local migrations directory" e sugerem
+-- `migration repair --status reverted` nas 23 versões nessa situação.
+-- NÃO fizemos isso: apagar as linhas de histórico do Lovable pode levá-lo
+-- a reaplicar as próprias migrations em cima da produção.
+--
+-- Este arquivo existe só para o CLI encontrar a versão e seguir em frente.
+-- O efeito real dela já está no banco.
+--
+-- ⚠️ PARA REPLICAR O BANCO NUM CLIENTE NOVO: não confie neste arquivo.
+-- Ele é vazio. A base de um banco novo é o dump em
+-- `00000000000000_init.sql` (que o próprio `db push` pula), conforme
+-- docs/SETUP-DATABASE.md e docs/PROCESSO-DUMP-BASELINE.md.
+--
+-- A correção definitiva é `supabase db pull` (exige Docker) para trazer o
+-- schema remoto de verdade para o repositório.
+-- ══════════════════════════════════════════════════════════════

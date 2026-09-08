@@ -287,11 +287,31 @@ export function useDeleteFeedComment() {
 
 // Estado de leitura do feed em BD (tabela feed_reads) — persiste entre dispositivos.
 // Antes era localStorage, que não sincronizava celular ↔ desktop.
+//
+// PERF (mesmo erro da v8.35.0, um nível abaixo): este hook chamava `useFeedPosts()`
+// só para CONTAR quantos posts são mais novos que o `last_read_at`. Isso baixava os
+// 50 posts inteiros — `content`, `attachments` (JSON de anexos), tags — e ainda fazia
+// uma segunda requisição em `employees_hierarchy_view` para hidratar nome/avatar dos
+// autores. Tudo isso para produzir UM número. E como o `BottomNav` monta este hook,
+// no celular isso acontecia em TODA página, a cada montagem/foco.
+// Agora a contagem é feita no banco com `head: true` (nenhuma linha trafega, só o
+// header `Content-Range`). `useFeedPosts()` continua sendo usado apenas por quem
+// realmente renderiza o feed (`Feed.tsx`).
+//
+// O número exibido é idêntico ao anterior, critério a critério:
+// - Visibilidade: `feed_posts` tem RLS (função SECURITY DEFINER — ver docs/FEED.md);
+//   nada era filtrado no cliente, então a mesma regra vale para o COUNT.
+// - Tenant: mesmo `.eq("tenant_id", ...)` da listagem.
+// - Autor: posts do próprio usuário contavam antes e continuam contando.
+// - Deletados: `feed_posts` não tem soft delete/arquivamento — delete é físico.
+// - `last_read_at` nulo (nunca abriu o feed): sem filtro de data, conta todos.
+// - Teto de 50: a listagem era `.limit(50)` ordenada por `created_at DESC`, e os não
+//   lidos são justamente os mais recentes — logo o valor antigo era `min(total, 50)`.
+//   O `Math.min` abaixo reproduz esse teto.
 export function useFeedUnreadCount() {
   const { user, profile } = useAuth();
   const tenantId = profile?.tenant_id;
   const qc = useQueryClient();
-  const { data: posts = [] } = useFeedPosts();
 
   const { data: lastReadAt = null } = useQuery({
     queryKey: ["feed_read", user?.id],
@@ -309,12 +329,28 @@ export function useFeedUnreadCount() {
     },
   });
 
+  // Mesmo teto da listagem antiga (`.limit(50)`).
+  const FEED_UNREAD_CAP = 50;
+
+  const { data: rawCount = 0 } = useQuery({
+    queryKey: ["feed_unread_count", tenantId, lastReadAt],
+    staleTime: 1000 * 60,
+    enabled: !!tenantId,
+    queryFn: async () => {
+      let q = (supabase as any)
+        .from("feed_posts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId!);
+      if (lastReadAt) q = q.gt("created_at", lastReadAt as string);
+      const { count, error } = await q;
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
   const count = useMemo(
-    () =>
-      posts.filter(
-        (p) => !lastReadAt || new Date(p.created_at) > new Date(lastReadAt as string),
-      ).length,
-    [posts, lastReadAt],
+    () => Math.min(rawCount as number, FEED_UNREAD_CAP),
+    [rawCount],
   );
 
   const markRead = useCallback(async () => {

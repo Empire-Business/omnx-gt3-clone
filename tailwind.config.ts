@@ -124,6 +124,20 @@ export default {
         },
 
         /* ── Sidebar ── */
+        // Chat — balões e papel da conversa (v8.42)
+        "chat-canvas": "hsl(var(--chat-canvas))",
+        "chat-composer": "hsl(var(--chat-composer))",
+        "chat-input": "hsl(var(--chat-input))",
+        "chat-meta": "hsl(var(--chat-meta))",
+        "chat-check-read": "hsl(var(--chat-check-read))",
+        "chat-bubble-out": {
+          DEFAULT: "hsl(var(--chat-bubble-out))",
+          foreground: "hsl(var(--chat-bubble-out-foreground))",
+        },
+        "chat-bubble-in": {
+          DEFAULT: "hsl(var(--chat-bubble-in))",
+          foreground: "hsl(var(--chat-bubble-in-foreground))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",

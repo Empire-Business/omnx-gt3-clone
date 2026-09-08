@@ -27,6 +27,9 @@ import { KanbanSkeleton } from "@/components/shared/SmartSkeleton";
 import { PermissionGuard } from "@/components/permissions/PermissionGuard";
 import { StatusBadge, AvatarBadge } from "@/components/shared/SharedComponents";
 import { HierarchyFilter } from "@/components/shared/HierarchyFilter";
+import { AssigneeMultiSelect } from "@/components/shared/AssigneeMultiSelect";
+import { VoiceTaskRecorder } from "@/components/tasks/VoiceTaskRecorder";
+import type { VoiceTaskDraft } from "@/hooks/useTaskVoiceAI";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -215,7 +218,7 @@ export function KanbanBoard({
   const [quickAddOpen, setQuickAddOpen] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddDescription, setQuickAddDescription] = useState("");
-  const [quickAddAssignee, setQuickAddAssignee] = useState<string>("");
+  const [quickAddAssignees, setQuickAddAssignees] = useState<string[]>([]);
   const [quickAddProject, setQuickAddProject] = useState<string>("");
 
   // ── Recorrência ──────────────────────────────────────────────
@@ -283,7 +286,7 @@ export function KanbanBoard({
 
   const [form, setForm] = useState({
     title: "", description: "", priority: "medium" as TaskPriority,
-    status: "todo" as TaskStatus, project_id: projectId || "", assignee_id: "", due_date: "",
+    status: "todo" as TaskStatus, project_id: projectId || "", assignee_ids: [] as string[], due_date: "",
     checklist_items: [] as { text: string; checked: boolean }[],
   });
   const [newCheckItem, setNewCheckItem] = useState("");
@@ -294,7 +297,7 @@ export function KanbanBoard({
   const draftKey = `omnx:taskdraft:${projectId || "global"}`;
   const emptyForm = () => ({
     title: "", description: "", priority: "medium" as TaskPriority,
-    status: "todo" as TaskStatus, project_id: projectId || "", assignee_id: "", due_date: "",
+    status: "todo" as TaskStatus, project_id: projectId || "", assignee_ids: [] as string[], due_date: "",
     checklist_items: [] as { text: string; checked: boolean }[],
   });
   const loadTaskDraft = () => {
@@ -302,7 +305,11 @@ export function KanbanBoard({
       const raw = localStorage.getItem(draftKey);
       if (!raw) return null;
       const d = JSON.parse(raw);
-      return { ...emptyForm(), ...d, project_id: d.project_id || projectId || "" };
+      // Rascunhos gravados antes do multi-responsável guardavam `assignee_id` string.
+      const assignee_ids = Array.isArray(d.assignee_ids)
+        ? d.assignee_ids
+        : d.assignee_id ? [d.assignee_id] : [];
+      return { ...emptyForm(), ...d, assignee_ids, project_id: d.project_id || projectId || "" };
     } catch { return null; }
   };
   const clearTaskDraft = () => { try { localStorage.removeItem(draftKey); } catch { /* noop */ } };
@@ -435,7 +442,7 @@ export function KanbanBoard({
   useEffect(() => {
     if (!dialogOpen || editingTask) return;
     const hasContent =
-      form.title || form.description || form.assignee_id || form.due_date || form.checklist_items.length > 0;
+      form.title || form.description || form.assignee_ids.length > 0 || form.due_date || form.checklist_items.length > 0;
     try {
       if (hasContent) localStorage.setItem(draftKey, JSON.stringify(form));
       else localStorage.removeItem(draftKey);
@@ -468,7 +475,7 @@ export function KanbanBoard({
 
   const resetForm = () => setForm({
     title: "", description: "", priority: "medium", status: "todo",
-    project_id: projectId || "", assignee_id: "", due_date: "", checklist_items: [],
+    project_id: projectId || "", assignee_ids: [], due_date: "", checklist_items: [],
   });
 
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -610,6 +617,32 @@ export function KanbanBoard({
     setDialogOpen(true);
   };
 
+  // Preenche o formulário com o rascunho vindo do áudio. Nada é salvo aqui —
+  // o usuário revisa e clica em Criar, como em qualquer tarefa digitada.
+  const applyVoiceDraft = (draft: VoiceTaskDraft) => {
+    setForm((prev) => ({
+      ...prev,
+      title: draft.title || prev.title,
+      description: draft.description || prev.description,
+      priority: draft.priority,
+      due_date: draft.due_date || prev.due_date,
+      // Dentro de um projeto o board é fixo — não deixamos a IA mudar o escopo.
+      project_id: projectId || draft.project_id || prev.project_id,
+      // Member continua sem poder atribuir a outros: o backend do form já força
+      // o próprio usuário, então nem preenchemos a lista aqui.
+      assignee_ids: isMember ? prev.assignee_ids : (draft.assignee_ids.length > 0 ? draft.assignee_ids : prev.assignee_ids),
+      checklist_items: draft.checklist_items.length > 0 ? draft.checklist_items : prev.checklist_items,
+    }));
+
+    if (draft.unmatched_assignees.length > 0) {
+      toast.warning(
+        `Não encontrei ${draft.unmatched_assignees.join(", ")} entre os colaboradores — escolha o responsável manualmente.`
+      );
+    } else {
+      toast.success("Tarefa montada a partir do seu áudio. Revise antes de criar.");
+    }
+  };
+
   const handleOpenEdit = (t: TaskWithDetails) => {
     const checklist = Array.isArray(t.checklist_items) ? (t.checklist_items as any[]) : [];
     setForm({
@@ -617,7 +650,9 @@ export function KanbanBoard({
       priority: (t.priority || "medium") as TaskPriority,
       status: (t.status || "todo") as TaskStatus,
       project_id: t.project_id || projectId || "",
-      assignee_id: t.assignee_id || "",
+      assignee_ids: t.assignees && t.assignees.length > 0
+        ? t.assignees.map((a) => a.employee_id)
+        : t.assignee_id ? [t.assignee_id] : [],
       due_date: extractDateForInput(t.due_date),
       checklist_items: checklist,
     });
@@ -633,7 +668,7 @@ export function KanbanBoard({
   const resetQuickAdd = () => {
     setQuickAddTitle("");
     setQuickAddDescription("");
-    setQuickAddAssignee("");
+    setQuickAddAssignees([]);
     setQuickAddProject("");
   };
   const handleQuickAdd = async (statusKey: TaskStatus) => {
@@ -648,16 +683,16 @@ export function KanbanBoard({
     const finalTitle = smart?.cleanedText || rawTitle;
     const dueDate = smart?.date ?? null;
     try {
-      const quickAssignee = isMember
-        ? currentEmployee?.id ?? null
-        : quickAddAssignee || null;
+      const quickAssignees = isMember
+        ? currentEmployee?.id ? [currentEmployee.id] : []
+        : quickAddAssignees;
       await createTask.mutateAsync({
         title: finalTitle,
         description: quickAddDescription.trim() || null,
         priority: "medium",
         status: statusKey,
         project_id: quickAddProject || projectId || null,
-        assignee_id: quickAssignee,
+        assignee_ids: quickAssignees,
         due_date: dueDate,
         checklist_items: null,
       } as any);
@@ -685,17 +720,17 @@ export function KanbanBoard({
     try {
       // Member só pode atribuir tarefas a si mesmo (na criação).
       const isCreatingNew = !editingTask;
-      const enforcedAssignee =
+      const enforcedAssignees =
         isCreatingNew && isMember
-          ? currentEmployee?.id ?? null
-          : form.assignee_id || null;
+          ? currentEmployee?.id ? [currentEmployee.id] : []
+          : form.assignee_ids;
       const payload = {
         title: form.title.trim(),
         description: form.description.trim() || null,
         priority: form.priority,
         status: form.status,
         project_id: form.project_id || null,
-        assignee_id: enforcedAssignee,
+        assignee_id: enforcedAssignees[0] ?? null,
         due_date: normalizeDateForSave(form.due_date),
         checklist_items: form.checklist_items.length > 0 ? form.checklist_items : null,
       };
@@ -710,9 +745,15 @@ export function KanbanBoard({
           ...payload,
           labels: syncProjectLabel(currentLabels, selectedProject, projects || []) as any,
         });
+        // Mantém task_assignees em sincronia com o que foi escolhido no modal.
+        await syncAssignees.mutateAsync({ taskId: editingTask.id, employeeIds: enforcedAssignees });
         toast.success("Tarefa atualizada!");
       } else {
-        const newTask = await createTask.mutateAsync({ ...payload, labels: labels as any });
+        const newTask = await createTask.mutateAsync({
+          ...payload,
+          assignee_ids: enforcedAssignees,
+          labels: labels as any,
+        });
         if (newTask?.id) {
           if (recEnabled && profile?.tenant_id) {
             await supabase.from("task_recurrence").insert({
@@ -1652,25 +1693,15 @@ export function KanbanBoard({
                                       className="text-xs resize-none border-none focus-visible:ring-0 focus-visible:ring-offset-0 px-1.5 py-1 min-h-[40px]"
                                     />
                                     <div className="flex flex-col gap-1 pt-1 border-t border-border/40">
-                                      <Select
-                                        value={quickAddAssignee || "none"}
-                                        onValueChange={(v) => setQuickAddAssignee(v === "none" ? "" : v)}
-                                      >
-                                        <SelectTrigger className="h-7 text-xs px-2">
-                                          <User className="w-3 h-3 mr-1 text-muted-foreground" />
-                                          <SelectValue placeholder="Responsável" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          <SelectItem value="none">Sem responsável</SelectItem>
-                                          {(employees || [])
-                                            .filter((e) => e.status === "active")
-                                            .map((e) => (
-                                              <SelectItem key={e.id} value={e.id}>
-                                                {e.full_name}
-                                              </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                      </Select>
+                                      {!isMember && (
+                                        <AssigneeMultiSelect
+                                          value={quickAddAssignees}
+                                          onChange={setQuickAddAssignees}
+                                          employees={employees || []}
+                                          placeholder="Responsáveis"
+                                          triggerClassName="h-7 text-xs px-2"
+                                        />
+                                      )}
                                       {!projectId && (
                                         <Select
                                           value={quickAddProject || "none"}
@@ -1892,6 +1923,8 @@ export function KanbanBoard({
             <DialogTitle className="text-lg font-semibold">{editingTask ? "Editar Tarefa" : "Nova Tarefa"}</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-5 py-4">
+            {/* Ditar tarefa: a IA preenche os campos abaixo para o usuário revisar. */}
+            {!editingTask && <VoiceTaskRecorder onDraft={applyVoiceDraft} />}
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Título *</Label>
               <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Título da tarefa" className="h-10 font-medium" />
@@ -1934,21 +1967,19 @@ export function KanbanBoard({
                 </div>
               )}
               <div className={projectId ? "col-span-2 space-y-1.5" : "space-y-1.5"}>
-                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Responsável</Label>
-                {isMember && !editingTask ? (
-                  <div className="h-10 px-3 flex items-center rounded-md border border-input bg-muted/40 text-sm text-muted-foreground">
-                    {currentEmployee?.full_name ?? "Você"} · não pode atribuir a outros
-                  </div>
-                ) : (
-                  <Select value={form.assignee_id || "none"} onValueChange={(v) => setForm({ ...form, assignee_id: v === "none" ? "" : v })}>
-                    <SelectTrigger className="h-10"><SelectValue placeholder="Sem responsável" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Sem responsável</SelectItem>
-                      {(employees || []).filter((e) => e.status === "active").map((e) => (
-                        <SelectItem key={e.id} value={e.id}>{e.full_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Responsáveis</Label>
+                <AssigneeMultiSelect
+                  value={form.assignee_ids}
+                  onChange={(ids) => setForm({ ...form, assignee_ids: ids })}
+                  employees={employees || []}
+                  isMember={isMember && !editingTask}
+                  memberName={currentEmployee?.full_name}
+                  placeholder="Sem responsável"
+                />
+                {form.assignee_ids.length > 1 && (
+                  <p className="text-2xs text-muted-foreground">
+                    {form.assignee_ids.length} pessoas nesta tarefa — todas recebem a notificação.
+                  </p>
                 )}
               </div>
             </div>

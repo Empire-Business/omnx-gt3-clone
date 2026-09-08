@@ -1,14 +1,15 @@
-import { useState, useEffect, useMemo, useRef, memo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { notifyPathChange } from "@/hooks/useLivePathname";
 import {
   Hash, MessageSquare, Search, Bell, BellOff, Users, MoreHorizontal, FolderKanban, CalendarDays,
   Plus, Send, Bold, Italic, Paperclip, Image as ImageIcon,
   CheckSquare, Sparkles, Trash2, Smile, Video, Check, CheckCheck, Mic,
   Crown, Target, Package, Settings, Megaphone, Bookmark,
   PanelRightOpen, PanelRightClose, X, Star, Link2, Volume2, Clock, FileText, ChevronRight,
-  Info, ChevronLeft, StickyNote, Pin,
+  Info, ChevronLeft, ChevronDown, StickyNote, Pin,
   BarChart3, Play, Pause, Captions, Phone as PhoneIcon, Maximize2, Download, Loader2,
-  ZoomIn, ZoomOut,
+  ZoomIn, ZoomOut, MessageSquarePlus,
 } from "lucide-react";
 
 // Mapeia nome do canal → ícone + cor + bg quadrado
@@ -19,6 +20,9 @@ const CHANNEL_THEME: Record<string, { Icon: typeof Hash; tone: string; bg: strin
   operacao:   { Icon: Settings,  tone: "text-violet-500",  bg: "bg-violet-100 dark:bg-violet-950/40" },
   entrega:    { Icon: Package,   tone: "text-emerald-500", bg: "bg-emerald-100 dark:bg-emerald-950/40" },
 };
+// Margem em px para considerar que o usuário está "no fim" da conversa
+const BOTTOM_THRESHOLD_PX = 80;
+
 function getChannelTheme(name: string) {
   return CHANNEL_THEME[name] || { Icon: Bookmark, tone: "text-muted-foreground", bg: "bg-muted" };
 }
@@ -232,16 +236,156 @@ function ZoomableImage({ src, alt }: { src: string; alt?: string }) {
   );
 }
 
+// Chips de filtro da lista de conversas (topo da sidebar), no lugar das antigas
+// seções colapsáveis. A ordem é a do WhatsApp; "Canais" é nosso — é o que
+// substitui a seção fixa que existia antes, sem esconder nada do usuário.
+const CHAT_FILTERS = [
+  { key: "all", label: "Tudo" },
+  { key: "unread", label: "Não lidas" },
+  { key: "favorites", label: "Favoritos" },
+  { key: "groups", label: "Grupos" },
+  { key: "channels", label: "Canais" },
+] as const;
+type ChatFilter = (typeof CHAT_FILTERS)[number]["key"];
+
+// ─── Linha da lista de conversas ───
+// Estrutura do WhatsApp: avatar à esquerda, nome + horário na primeira linha,
+// prévia + status (silenciado / fixado / não lidas) na segunda. Sem linha
+// divisória entre os itens: o que separa uma conversa da outra é o espaço e o
+// realce de hover/seleção — régua de borda a cada 64px suja a lista inteira,
+// ainda mais no tema claro, onde a borda tem contraste alto demais.
+function ChatListRow({
+  avatar, title, titleClassName, time, preview, unread = 0, muted, pinned,
+  selected, onClick, onTogglePin, birthday, onCongratulate,
+}: {
+  avatar: React.ReactNode;
+  title: string;
+  titleClassName?: string;
+  time?: string;
+  preview: React.ReactNode;
+  unread?: number;
+  muted?: boolean;
+  pinned?: boolean;
+  selected?: boolean;
+  onClick: () => void;
+  onTogglePin?: () => void;
+  /** Aniversariante do dia: a linha ganha destaque e o atalho de parabéns. */
+  birthday?: boolean;
+  onCongratulate?: () => void;
+}) {
+  const hasUnread = unread > 0 && !selected;
+  // No aniversário, o pin cede o canto para o botão de parabenizar — dois
+  // controles absolutos no mesmo ponto se cobririam.
+  const showPin = !!onTogglePin && !birthday;
+  return (
+    <div className="relative group px-1.5">
+      <button
+        type="button"
+        onClick={onClick}
+        title={title}
+        className={cn(
+          // Conversa aberta usa exatamente o realce do item ativo da AppSidebar
+          // (`bg-primary-light` + texto primário): duas listas de navegação
+          // dentro do mesmo app não podem marcar "onde estou" de jeitos
+          // diferentes.
+          "w-full flex items-stretch gap-3 px-2.5 rounded-lg text-left transition-colors duration-100",
+          selected
+            ? "bg-primary-light"
+            : birthday
+              // Aniversariante do dia: a linha inteira vira um cartão de festa.
+              // É o mesmo âmbar que o chat já usa para "atenção positiva"
+              // (mensagem fixada, rascunho), agora como fundo em degradê.
+              ? "bg-gradient-to-r from-amber-100/90 to-amber-50/40 dark:from-amber-500/15 dark:to-amber-500/5 ring-1 ring-amber-300/70 dark:ring-amber-500/30 hover:from-amber-100 hover:to-amber-100/60"
+              : "hover:bg-sidebar-accent/60 active:bg-sidebar-accent"
+        )}
+      >
+        <div className="flex items-center py-2.5 flex-shrink-0">{avatar}</div>
+        <div className="flex-1 min-w-0 py-2.5 flex flex-col justify-center gap-0.5">
+          <div className="flex items-center gap-2">
+            <span className={cn(
+              "flex-1 min-w-0 truncate text-[15px] leading-tight",
+              // Selecionado ganha peso, não cor: o fundo já marca onde estamos,
+              // e pintar o nome de azul por cima do azul claro derruba o
+              // contraste do texto — que é o que precisa ser lido.
+              selected || hasUnread ? "font-semibold text-sidebar-foreground" : "font-medium text-sidebar-foreground",
+              titleClassName
+            )}>
+              {title}
+            </span>
+            {time && (
+              <span className={cn(
+                "flex-shrink-0 text-[11px] tabular-nums leading-none",
+                hasUnread ? "text-primary font-semibold" : "text-muted-foreground"
+              )}>
+                {time}
+              </span>
+            )}
+          </div>
+          <div className={cn(
+            "flex items-center gap-2 text-[13px] leading-tight",
+            hasUnread ? "text-foreground/80" : "text-muted-foreground"
+          )}>
+            <span className="flex-1 min-w-0 truncate">{preview}</span>
+            <span className={cn(
+              "flex-shrink-0 flex items-center gap-1.5",
+              // O pin é um botão irmão, posicionado por cima desta linha (para
+              // não aninhar <button> dentro de <button>). Aqui só reservamos o
+              // espaço dele: sempre que está fixado, e no hover quando ainda não
+              // está — senão ele cobriria o badge de não lidas.
+              showPin && (pinned ? "pr-6" : "group-hover:pr-6"),
+              // O botão "Parabéns" flutua sobre esta linha; reserva fixa.
+              birthday && onCongratulate && "pr-[70px]"
+            )}>
+              {muted && <BellOff className="w-4 h-4 opacity-60" aria-label="Silenciado" />}
+              {hasUnread && (
+                <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-primary text-primary-foreground text-[11px] font-semibold flex items-center justify-center tabular-nums">
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              )}
+            </span>
+          </div>
+        </div>
+      </button>
+      {birthday && onCongratulate && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCongratulate(); }}
+          className="absolute bottom-2.5 right-3 h-6 px-2 rounded-full bg-amber-500 text-white text-[10px] font-semibold shadow-sm hover:bg-amber-600 active:scale-95 transition-all"
+          title="Abrir a conversa com a mensagem de parabéns pronta"
+        >
+          Parabéns
+        </button>
+      )}
+      {showPin && onTogglePin && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+          className={cn(
+            "absolute bottom-2.5 right-2 p-1 rounded transition-opacity hover:bg-background/60",
+            pinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          )}
+          title={pinned ? "Desafixar" : "Fixar"}
+          aria-label={pinned ? "Desafixar conversa" : "Fixar conversa"}
+        >
+          <Pin className={cn("w-3.5 h-3.5 rotate-45", pinned ? "text-primary fill-primary" : "text-muted-foreground")} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Avatar quadrado para grupos/canais (com bolinha de "grupo" no canto inferior direito)
-function ChannelAvatar({ name, size = "md", noGroupIndicator }: { name: string; size?: "sm" | "md" | "lg"; noGroupIndicator?: boolean }) {
+function ChannelAvatar({ name, size = "md", noGroupIndicator, circle }: { name: string; size?: "sm" | "md" | "lg" | "xl"; noGroupIndicator?: boolean; circle?: boolean }) {
   const { Icon, tone, bg } = getChannelTheme(name);
-  const sz = size === "sm" ? "w-7 h-7" : size === "lg" ? "w-11 h-11" : "w-9 h-9";
-  const ic = size === "sm" ? "w-3.5 h-3.5" : size === "lg" ? "w-5 h-5" : "w-4 h-4";
-  const dot = size === "sm" ? "w-3 h-3 -bottom-0.5 -right-0.5" : size === "lg" ? "w-4 h-4 -bottom-1 -right-1" : "w-3.5 h-3.5 -bottom-0.5 -right-0.5";
-  const dotIc = size === "sm" ? "w-2 h-2" : size === "lg" ? "w-2.5 h-2.5" : "w-2 h-2";
+  // "xl" (48px) existe para a LISTA de conversas, que segue a escala do
+  // WhatsApp; "lg" (44px) continua sendo o do header e do painel de detalhes.
+  const sz = size === "sm" ? "w-7 h-7" : size === "xl" ? "w-12 h-12" : size === "lg" ? "w-11 h-11" : "w-9 h-9";
+  const ic = size === "sm" ? "w-3.5 h-3.5" : size === "xl" ? "w-[22px] h-[22px]" : size === "lg" ? "w-5 h-5" : "w-4 h-4";
+  const dot = size === "sm" ? "w-3 h-3 -bottom-0.5 -right-0.5" : size === "xl" || size === "lg" ? "w-4 h-4 -bottom-1 -right-1" : "w-3.5 h-3.5 -bottom-0.5 -right-0.5";
+  const dotIc = size === "sm" ? "w-2 h-2" : size === "xl" || size === "lg" ? "w-2.5 h-2.5" : "w-2 h-2";
   return (
     <div className="relative flex-shrink-0">
-      <div className={cn("rounded-md flex items-center justify-center", sz, bg)}>
+      <div className={cn("flex items-center justify-center", circle ? "rounded-full" : "rounded-md", sz, bg)}>
         <Icon className={cn(ic, tone)} />
       </div>
       {!noGroupIndicator && (
@@ -297,7 +441,7 @@ import {
   useUpdateMessage, useMarkRead, useChatUnread, useChatLastMessages, useChatOthersReads,
   useChatPolls, useCreatePoll, useChatNotifications, useChatGlobalSearch, useChatFavorites,
   usePinnedMessages, useMutedChannels, useStarredMessages, formatChatPreviewTime, formatChatDayLabel,
-  useTypingIndicator, useForwardMessage, useReadReceipts,
+  useTypingIndicator, useTenantTyping, useForwardMessage, useReadReceipts,
   useActiveHuddle, useStartHuddle, useEndHuddle,
   uploadChannelAvatar, uploadChatAttachment, findOrCreateDM, formatLastSeen, isBirthdayToday,
   type MemberRead,
@@ -316,6 +460,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { AvatarBadge } from "@/components/shared/SharedComponents";
+import { AssigneeMultiSelect } from "@/components/shared/AssigneeMultiSelect";
+import { VoiceTaskRecorder } from "@/components/tasks/VoiceTaskRecorder";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -323,6 +469,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -351,9 +498,23 @@ import { format, isSameDay } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { isSystemBotEmployee } from "@/lib/system-bots";
+import { useLongPress } from "@/hooks/useLongPress";
+import { useSwipeToReply } from "@/hooks/useSwipeToReply";
+import { MessageActionsSheet } from "@/components/chat/v2/MessageActionsSheet";
+import { ComposerAttachMenu } from "@/components/chat/v2/ComposerAttachMenu";
+import { ChannelInfoDrawer } from "@/components/chat/v2/ChannelInfoDrawer";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // Reações rápidas — sem categorias, só o set principal
 const QUICK_EMOJIS = REACTIONS.map((r) => r.key);
+
+// Durações de silenciamento — usadas no botão do header e no painel de detalhes
+const MUTE_OPTIONS: Array<{ label: string; h: number | null }> = [
+  { label: "1 hora", h: 1 },
+  { label: "8 horas", h: 8 },
+  { label: "24 horas", h: 24 },
+  { label: "Para sempre", h: null },
+];
 
 export default function Chat() {
   const { channelId: urlChannelId } = useParams<{ channelId?: string }>();
@@ -366,18 +527,20 @@ export default function Chat() {
   const { data: presence } = useChatPresence();
 
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
-  const [channelsCollapsed, setChannelsCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem("chat:sidebar:channelsCollapsed") === "1"; } catch { return false; }
-  });
-  const [dmsCollapsed, setDmsCollapsed] = useState<boolean>(() => {
-    try { return localStorage.getItem("chat:sidebar:dmsCollapsed") === "1"; } catch { return false; }
+  // Filtro da lista de conversas (chips no topo, estilo WhatsApp). Substituiu as
+  // duas seções colapsáveis ("Canais" / "Mensagens diretas"): com seções, uma
+  // conversa recente podia ficar abaixo da dobra só por estar no grupo errado —
+  // a lista agora é única e ordenada por atividade, e quem quer recortar usa os
+  // chips.
+  const [chatFilter, setChatFilter] = useState<ChatFilter>(() => {
+    try {
+      const saved = localStorage.getItem("chat:sidebar:filter");
+      return (CHAT_FILTERS.some((f) => f.key === saved) ? saved : "all") as ChatFilter;
+    } catch { return "all"; }
   });
   useEffect(() => {
-    try { localStorage.setItem("chat:sidebar:channelsCollapsed", channelsCollapsed ? "1" : "0"); } catch { /* */ }
-  }, [channelsCollapsed]);
-  useEffect(() => {
-    try { localStorage.setItem("chat:sidebar:dmsCollapsed", dmsCollapsed ? "1" : "0"); } catch { /* */ }
-  }, [dmsCollapsed]);
+    try { localStorage.setItem("chat:sidebar:filter", chatFilter); } catch { /* */ }
+  }, [chatFilter]);
   // Sincroniza só na montagem inicial e quando ainda não tem canal selecionado.
   // Trocas de canal acontecem via selectChannel() + history.replaceState — sem disparar router.
   useEffect(() => {
@@ -395,7 +558,17 @@ export default function Chat() {
   }, [channels.length]);
 
   const channel = channels.find((c) => c.id === selectedChannelId);
-  const { data: messages = [], hasMore, loadOlder, send, remove } = useChatMessages(selectedChannelId || undefined);
+  // `isLoading`/`isError`/`refetch` NÃO são opcionais aqui: sem eles, uma query
+  // que ainda está buscando (ou que falhou) devolve `[]` e a tela afirma
+  // "Nenhuma mensagem ainda / diga olá!" — ou seja, o app mente sobre uma
+  // conversa cheia. Era isso que obrigava a recarregar a página na mão.
+  const {
+    data: messages = [],
+    hasMore, loadOlder, send, remove,
+    isLoading: loadingMessages,
+    isError: messagesError,
+    refetch: refetchMessages,
+  } = useChatMessages(selectedChannelId || undefined);
   const { data: members = [] } = useChatChannelMembers(selectedChannelId || undefined);
   const { data: reactions = [], toggle: toggleReaction } = useChatReactions(selectedChannelId || undefined);
 
@@ -423,6 +596,15 @@ export default function Chat() {
   }, [draft]);
   const [emojiOpen, setEmojiOpen] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Scroll da lista de mensagens: controla o auto-scroll e a pílula "X mensagens novas"
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  // Marcador por ID, não por contagem: carregar histórico antigo aumenta
+  // `messages.length` sem que nada tenha chegado no fim — com contagem, abrir
+  // mensagens antigas anunciava "20 mensagens novas".
+  const lastSeenIdRef = useRef<string | null>(null);
+  const [unreadBelow, setUnreadBelow] = useState(0);
+  const [showJumpToEnd, setShowJumpToEnd] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -433,6 +615,11 @@ export default function Chat() {
   const [dmSearch, setDmSearch] = useState("");
   const [creatingDm, setCreatingDm] = useState(false);
   const [infoPanelOpen, setInfoPanelOpen] = useState(false);
+  // Equivalente mobile do painel de detalhes: o `infoPanelOpen` acima só
+  // monta em telas md+, então no celular não havia NENHUMA forma de ver ou
+  // gerenciar os membros de um grupo.
+  const [infoDrawerOpen, setInfoDrawerOpen] = useState(false);
+  const isMobile = useIsMobile();
   const [soundOn, setSoundOn] = useState(true);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [showAllMembers, setShowAllMembers] = useState(false);
@@ -450,6 +637,10 @@ export default function Chat() {
   const { data: starredSet, toggleStar } = useStarredMessages();
   const isCurrentMuted = selectedChannelId ? mutedSet?.has(selectedChannelId) ?? false : false;
   const { typers, sendTyping } = useTypingIndicator(selectedChannelId || undefined);
+  // Atividade de QUALQUER conversa, para marcar o card na sidebar mesmo com
+  // ela fechada. Um canal por tenant — assinar um canal por conversa da
+  // lista não escala.
+  const typingByChannel = useTenantTyping(profile?.tenant_id);
   const forward = useForwardMessage();
   const { data: activeHuddle } = useActiveHuddle(selectedChannelId || undefined);
   const startHuddle = useStartHuddle();
@@ -497,6 +688,14 @@ export default function Chat() {
     setDraftsByChannel(out);
   }, [draft, selectedChannelId]);
   const { data: unreadMap } = useChatUnread();
+  // Quantas CONVERSAS têm mensagem não lida (não quantas mensagens) — é o
+  // número que o chip "Não lidas" mostra, igual ao WhatsApp.
+  const unreadConversationsCount = useMemo(() => {
+    if (!unreadMap) return 0;
+    let n = 0;
+    unreadMap.forEach((v) => { if (v > 0) n++; });
+    return n;
+  }, [unreadMap]);
   const { data: lastMessagesMap } = useChatLastMessages(channels.map((c) => c.id));
   const { data: othersReadsMap } = useChatOthersReads(channels.map((c) => c.id));
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
@@ -521,6 +720,7 @@ export default function Chat() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [pollDialogOpen, setPollDialogOpen] = useState(false);
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
@@ -529,10 +729,14 @@ export default function Chat() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
-  const [taskAssigneeId, setTaskAssigneeId] = useState<string>("");
+  const [taskAssigneeIds, setTaskAssigneeIds] = useState<string[]>([]);
   const [taskDueDate, setTaskDueDate] = useState<string>("");
   const [taskPriority, setTaskPriority] = useState<"low" | "medium" | "high" | "urgent">("medium");
   const [taskProjectId, setTaskProjectId] = useState<string>("");
+  // A checklist ditada por voz vinha da IA e era jogada fora aqui: este dialog
+  // nao tem editor de checklist, entao os itens sumiam sem aviso (no Kanban
+  // funcionava). Guardamos em estado e salvamos junto com a tarefa.
+  const [taskChecklistItems, setTaskChecklistItems] = useState<{ text: string; checked: boolean }[]>([]);
   // Reuniões direto do chat
   const createMeetingFromChat = useCreateMeeting();
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
@@ -878,9 +1082,81 @@ export default function Chat() {
   const isMember = !isAdmin && !isManager;
   const myEmployee = employees.find((e) => e.user_id === profile?.user_id) || null;
 
+  // ── Scroll das mensagens ────────────────────────────────────────────────
+  // Só rola sozinho quando o usuário já está no fim (ou quando a mensagem é
+  // dele). Se ele estiver lendo mais acima, mantém a posição e conta as novas
+  // para a pílula "X mensagens novas".
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    isAtBottomRef.current = true;
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    setUnreadBelow(0);
+    setShowJumpToEnd(false);
+    lastSeenIdRef.current = messages[messages.length - 1]?.id ?? null;
+  }, [messages]);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD_PX;
+    isAtBottomRef.current = atBottom;
+    // Botão de descer aparece bem antes do contador de novas: basta ter subido
+    // uma tela para valer o atalho de voltar ao fim.
+    setShowJumpToEnd(el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 0.5);
+    if (atBottom) {
+      setUnreadBelow(0);
+      lastSeenIdRef.current = messages[messages.length - 1]?.id ?? null;
+    }
+  }, [messages]);
+
+  // Enquanto estivermos no fim, qualquer conteúdo que CRESÇA depois do scroll
+  // precisa puxar a viewport de novo. Imagem e vídeo só passam a ocupar altura
+  // quando carregam — o scroll já terminou e a mensagem recém-enviada fica
+  // cortada, exigindo rolar na mão. `load` não borbulha, daí a fase de captura.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const stick = () => {
+      if (isAtBottomRef.current) el.scrollTop = el.scrollHeight;
+    };
+    el.addEventListener("load", stick, true);
+    el.addEventListener("loadedmetadata", stick, true);
+    return () => {
+      el.removeEventListener("load", stick, true);
+      el.removeEventListener("loadedmetadata", stick, true);
+    };
+  }, [selectedChannelId]);
+
+  // Ao trocar de canal, começa sempre no fim (sem animação) e zera o contador
+  useEffect(() => {
+    isAtBottomRef.current = true;
+    lastSeenIdRef.current = null;
+    setUnreadBelow(0);
+    setShowJumpToEnd(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [selectedChannelId]);
+
+  useEffect(() => {
+    const last = messages[messages.length - 1] as { id?: string; author_id?: string } | undefined;
+    if (!last?.id || last.id === lastSeenIdRef.current) return;
+
+    // Mensagem enviada por mim sempre desce junto
+    const isMine = last.author_id === profile?.user_id;
+
+    if (isAtBottomRef.current || isMine) {
+      // Enviar estando mais acima também recoloca no fim — sem isto o listener
+      // de `load` acima não puxaria a imagem recém-enviada.
+      isAtBottomRef.current = true;
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      setUnreadBelow(0);
+      setShowJumpToEnd(false);
+      lastSeenIdRef.current = last.id;
+    } else {
+      // Quantas chegaram depois da última vista. Imune à paginação: mensagens
+      // antigas entram ANTES do marcador e não contam.
+      const seenIdx = messages.findIndex((m) => m.id === lastSeenIdRef.current);
+      setUnreadBelow(seenIdx >= 0 ? messages.length - 1 - seenIdx : messages.length);
+    }
+  }, [messages, profile?.user_id]);
 
   // ESC fecha a conversa atual e volta para a sidebar de contatos.
   // Só atua quando não há overlay/popover/edição ativos — esses tratam o ESC primeiro.
@@ -899,6 +1175,10 @@ export default function Chat() {
       setClaraView(false);
       if (window.location.pathname !== "/chat") {
         window.history.replaceState({}, "", "/chat");
+        // Mesmo aviso do selectChannel(), na direção contrária: sem ele o
+        // layout continua achando que estamos DENTRO da conversa e a BottomNav
+        // some na lista.
+        notifyPathChange();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -944,6 +1224,10 @@ export default function Chat() {
     }
     return m;
   }, [employees]);
+
+  // Alterna mic/enviar no composer. Mesma condição que desabilitava o antigo
+  // botão de enviar — em edição sempre há o que salvar, mesmo com o campo vazio.
+  const hasComposerContent = !!draft.trim() || pendingAttachments.length > 0 || !!editingMsgId;
 
   const handleSend = () => {
     // Modo edição: salva alteração em vez de criar nova msg
@@ -1210,7 +1494,50 @@ export default function Chat() {
     setSelectedChannelId(id);
     if (window.location.pathname !== `/chat/${id}`) {
       window.history.replaceState({}, "", `/chat/${id}`);
+      // O router nao observa replaceState. Sem este aviso, AppLayout e
+      // BottomNav continuam achando que estamos na LISTA de conversas: a nav
+      // fica visivel por cima do chat e o <main> segue reservando a altura
+      // dela.
+      notifyPathChange();
     }
+  };
+
+  /**
+   * Cartão do MEU aniversário no topo da lista. Some sozinho quando o dia vira
+   * — a chave de dispensa carrega a data de hoje, então amanhã ela já não bate
+   * e um novo aniversário volta a mostrar o cartão sem nenhuma limpeza.
+   */
+  const myBirthdayToday = isBirthdayToday(profile?.birth_date);
+  const birthdayCardKey = `birthday-card-dismissed:${new Date().toISOString().slice(0, 10)}`;
+  const [birthdayCardDismissed, setBirthdayCardDismissed] = useState(() => {
+    try { return localStorage.getItem(birthdayCardKey) === "1"; } catch { return false; }
+  });
+  const dismissBirthdayCard = () => {
+    try { localStorage.setItem(birthdayCardKey, "1"); } catch { /* storage bloqueado */ }
+    setBirthdayCardDismissed(true);
+  };
+
+  /**
+   * Abre a conversa do aniversariante já com a mensagem de parabéns escrita —
+   * o usuário revisa, completa e envia. Não enviamos nada por conta própria:
+   * parabéns automático de robô é pior do que parabéns nenhum.
+   *
+   * O rascunho vai para o `localStorage` ANTES de trocar de canal porque o
+   * efeito que carrega rascunhos roda na troca e sobrescreveria um `setDraft`
+   * feito aqui.
+   */
+  const congratulate = (c: any) => {
+    const firstName = String(c?.display_name || "").trim().split(/\s+/)[0];
+    const message = firstName
+      ? `Feliz aniversário, ${firstName}! 🎉🎂 Muitas felicidades!`
+      : "Feliz aniversário! 🎉🎂 Muitas felicidades!";
+    if (selectedChannelId === c.id) {
+      setDraft(message);
+    } else {
+      try { localStorage.setItem(draftKey(c.id), message); } catch { /* storage cheio/bloqueado */ }
+      selectChannel(c.id);
+    }
+    setTimeout(() => composerRef.current?.focus(), 150);
   };
 
   // Canais = canais oficiais (is_system); omnx-bot está oculto por enquanto
@@ -1256,470 +1583,581 @@ export default function Chat() {
     return out.slice(0, 5);
   }, [messages]);
 
+  // `h-full`, não `h-[100dvh]`: o <main> do AppLayout já dimensiona a página.
+  // Altura absoluta aqui ignorava o box do main — inclusive a reserva de espaço
+  // da BottomNav —, e as últimas conversas da lista ficavam por baixo da barra,
+  // inalcançáveis no celular.
+  //
+  // No desktop, `-mx-5 -my-4` cancela o padding do <main> para o chat sangrar
+  // até a borda. Só que `h-full` resolve contra o CONTENT BOX do main, que já
+  // desconta esse padding: o elemento subia 16px e continuava 16px mais curto,
+  // deixando 32px de `bg-background` exposto na base — uma faixa branca atrás
+  // das duas colunas, na largura inteira. A altura precisa devolver o que a
+  // margem negativa tomou.
   return (
-    <div className="flex h-[100dvh] overflow-hidden md:-mx-5 md:-my-4">
+    <div className="flex h-full md:h-[calc(100%+2rem)] overflow-hidden md:-mx-5 md:-my-4">
       {/* ─── Sidebar de Canais ─── */}
       <aside className={cn(
-        "w-full md:w-80 flex-shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col",
+        "w-full md:w-80 flex-shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col min-h-0 relative",
         (selectedChannelId || notesView || claraView) && "hidden md:flex"
       )}>
-        {/* Busca global no topo */}
-        <div className="px-3 pt-3 pb-2 border-b border-sidebar-border/60">
+        {/* ─── Cabeçalho estilo WhatsApp ───
+            Título grande + busca em pílula + chips de filtro. Antes o topo era
+            só uma barra de busca de 28px de altura: a tela abria sem nome e sem
+            nenhum controle de recorte da lista. */}
+        <div className="flex-shrink-0 px-3 pt-3 pb-2 bg-sidebar">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <h1 className="text-2xl md:text-lg font-bold tracking-tight text-sidebar-foreground">
+              Conversas
+            </h1>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="hidden md:flex w-9 h-9 rounded-full bg-primary/10 hover:bg-primary/20 text-primary items-center justify-center transition-colors"
+                  aria-label="Nova conversa"
+                  title="Nova conversa"
+                >
+                  <MessageSquarePlus className="w-[18px] h-[18px]" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onSelect={() => setDmOpen(true)}>
+                  <MessageSquare className="w-3.5 h-3.5 mr-2" /> Nova conversa
+                </DropdownMenuItem>
+                {(isAdmin || isManager) && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+                      <Users className="w-3.5 h-3.5 mr-2" /> Criar grupo
+                      <span className="ml-auto text-2xs text-muted-foreground">{isAdmin ? "admin" : "manager"}</span>
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
           <button
             type="button"
             onClick={() => { setGlobalSearchOpen(true); setGlobalSearchQuery(""); }}
-            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-sidebar-accent/40 hover:bg-sidebar-accent text-muted-foreground hover:text-foreground transition-colors text-xs"
+            className="w-full flex items-center gap-2.5 px-3.5 h-10 rounded-full bg-sidebar-accent/50 hover:bg-sidebar-accent text-muted-foreground hover:text-foreground transition-colors text-sm"
             title="Buscar em todas as conversas (Ctrl+K)"
           >
-            <Search className="w-3.5 h-3.5" />
-            <span>Buscar mensagens, pessoas...</span>
-            <span className="ml-auto text-[10px] font-mono opacity-60">Ctrl+K</span>
+            <Search className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">Buscar mensagens, pessoas...</span>
+            <span className="ml-auto hidden md:inline text-[10px] font-mono opacity-60">Ctrl+K</span>
           </button>
-        </div>
-        <div className="flex-1 overflow-y-auto py-3">
-          <div className="px-2 mb-3">
-            <button
-              type="button"
-              onClick={() => setChannelsCollapsed((v) => !v)}
-              className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded hover:bg-sidebar-accent/40 transition-colors group"
-              aria-expanded={!channelsCollapsed}
-            >
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.08em] flex items-center gap-1.5">
-                <ChevronRight className={cn(
-                  "w-3.5 h-3.5 transition-transform",
-                  !channelsCollapsed && "rotate-90"
-                )} />
-                Canais
-                <span className="text-2xs font-normal text-muted-foreground/60 normal-case tracking-normal">
-                  · {publicChannels.length}
-                </span>
-              </span>
-            </button>
-            {/* Clara — assistente de IA (OpenRouter): só aparece se a integração de IA estiver conectada */}
-            {aiEnabled && (
-            <button
-              type="button"
-              onClick={() => {
-                setClaraView(true);
-                setNotesView(false);
-                setSelectedChannelId(null);
-                if (window.location.pathname !== "/chat") window.history.replaceState({}, "", "/chat");
-              }}
-              className={cn(
-                "relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md text-[15px] transition-colors",
-                claraView
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r-full before:bg-primary"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-              )}
-            >
-              <div className="relative flex-shrink-0">
-                <div className="w-11 h-11 rounded-md bg-primary/10 text-primary flex items-center justify-center">
-                  <CamiAvatar className="w-5 h-5" />
-                </div>
-                <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-card border border-border flex items-center justify-center">
-                  <span className="text-[8px] font-bold text-primary">IA</span>
-                </span>
-              </div>
-              <div className="flex-1 min-w-0 text-left">
-                <span className="truncate font-medium block">Clara</span>
-                <p className={cn(
-                  "text-xs truncate",
-                  claraView ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                )}>
-                  Assistente de IA
-                </p>
-              </div>
-            </button>
-            )}
-            {!channelsCollapsed && (loadingChannels ? (
-              <div className="text-xs text-muted-foreground px-2 py-1">Carregando...</div>
-            ) : (
-              publicChannels.map((c) => {
-                const unread = unreadMap?.get(c.id) || 0;
-                const last = lastMessagesMap?.get(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    onClick={() => selectChannel(c.id)}
-                    className={cn(
-                      "relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md text-[15px] transition-colors",
-                      selectedChannelId === c.id
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r-full before:bg-primary"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                    )}
-                  >
-                    <ChannelAvatar name={c.name} size="lg" />
-                    <div className="flex-1 min-w-0 text-left">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className={cn("truncate capitalize flex items-center gap-1.5", unread > 0 && selectedChannelId !== c.id && "font-semibold")}>
-                          <span className="truncate">{c.name}</span>
-                          {mutedSet?.has(c.id) && (
-                            <BellOff className={cn(
-                              "w-[18px] h-[18px] flex-shrink-0",
-                              selectedChannelId === c.id ? "text-sidebar-accent-foreground" : "text-muted-foreground"
-                            )} aria-label="Silenciado" />
-                          )}
-                        </span>
-                        {unread > 0 && selectedChannelId !== c.id && (
-                          <span className="text-[11px] font-semibold bg-destructive text-destructive-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center tabular-nums">
-                            {unread > 99 ? "99+" : unread}
-                          </span>
-                        )}
-                      </div>
-                      {draftsByChannel[c.id] && c.id !== selectedChannelId ? (
-                        <p className={cn(
-                          "text-xs truncate flex items-center gap-1",
-                          selectedChannelId === c.id ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                        )}>
-                          <span className="text-amber-600 dark:text-amber-400 font-semibold">rascunho:</span>
-                          <span className="truncate">{draftsByChannel[c.id].slice(0, 30)}</span>
-                        </p>
-                      ) : last ? (
-                        <p className={cn(
-                          "text-xs truncate flex items-center justify-between gap-1",
-                          selectedChannelId === c.id ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                        )}>
-                          <span className="truncate">
-                            <span className="font-medium">
-                              {last.author_id === profile?.user_id
-                                ? "Você"
-                                : (last.author_name?.split(" ")[0] || "—")}
-                              :
-                            </span>{" "}
-                            {last.content.slice(0, 28)}
-                          </span>
-                          <span className="text-[11px] tabular-nums opacity-70 flex-shrink-0">
-                            {formatChatPreviewTime(last.created_at)}
-                          </span>
-                        </p>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })
-            ))}
-          </div>
 
-          <div className="px-2">
-            <div className="flex items-center justify-between gap-1 pr-1">
-              <button
-                type="button"
-                onClick={() => setDmsCollapsed((v) => !v)}
-                className="flex-1 flex items-center gap-1.5 px-2 py-2 rounded hover:bg-sidebar-accent/40 transition-colors"
-                aria-expanded={!dmsCollapsed}
-              >
-                <ChevronRight className={cn(
-                  "w-3.5 h-3.5 text-muted-foreground transition-transform",
-                  !dmsCollapsed && "rotate-90"
-                )} />
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-[0.08em]">Mensagens diretas</span>
-              </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground transition-colors"
-                    title="Adicionar"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
-                  <DropdownMenuItem onSelect={() => setDmOpen(true)}>
-                    <MessageSquare className="w-3.5 h-3.5 mr-2" /> Nova conversa
-                  </DropdownMenuItem>
-                  {(isAdmin || isManager) && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
-                        <Users className="w-3.5 h-3.5 mr-2" /> Criar grupo
-                        <span className="ml-auto text-2xs text-muted-foreground">{isAdmin ? "admin" : "manager"}</span>
-                      </DropdownMenuItem>
-                    </>
+          {/* Chips: rolam na horizontal quando não cabem, sem quebrar linha. */}
+          <div className="flex items-center gap-2 mt-2.5 -mx-3 px-3 overflow-x-auto chat-chips-scroll">
+            {CHAT_FILTERS.map((f) => {
+              const active = chatFilter === f.key;
+              const count = f.key === "unread" ? unreadConversationsCount : 0;
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setChatFilter(f.key)}
+                  aria-pressed={active}
+                  className={cn(
+                    "flex-shrink-0 flex items-center gap-1.5 h-8 px-3.5 rounded-full text-[13px] font-medium transition-colors border",
+                    active
+                      ? "bg-primary/15 text-primary border-primary/30"
+                      : "bg-transparent text-muted-foreground border-sidebar-border hover:bg-sidebar-accent/50"
                   )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            {!dmsCollapsed && <>
-            {/* Lista unificada: OMNX Bot + grupos + DMs, ordenada por:
-                1) favoritos primeiro, 2) última atividade desc */}
-            {(() => {
-              type Entry =
-                | { kind: "channel"; channel: typeof customGroups[number]; sortTs: number; isFav: boolean }
-                | { kind: "anotacoes"; sortTs: number; isFav: boolean };
-              const ANOTACOES_KEY = "__anotacoes__";
-              const allChannels: Array<typeof customGroups[number]> = [
-                ...customGroups,
-                ...dms,
-                ...(omnxChannel ? [omnxChannel] : []),
-              ];
-              const ts = (c: any) =>
-                lastMessagesMap?.get(c.id)?.created_at
-                  ? new Date(lastMessagesMap.get(c.id)!.created_at).getTime()
-                  : new Date(c.created_at || 0).getTime();
-              const channelEntries: Entry[] = allChannels.map((c) => ({
-                kind: "channel" as const,
-                channel: c,
-                sortTs: ts(c),
-                isFav: favorites.has(c.id),
-              }));
-              // Anotações entra como entrada virtual com timestamp da última nota editada/criada
-              channelEntries.push({
-                kind: "anotacoes",
-                sortTs: lastNoteActivity || 0,
-                isFav: favorites.has(ANOTACOES_KEY),
-              });
-              // Ordena: favoritos primeiro, depois por última atividade desc
-              const entries = channelEntries.sort((a, b) => {
-                if (a.isFav !== b.isFav) return a.isFav ? -1 : 1;
-                return b.sortTs - a.sortTs;
-              });
+                >
+                  {f.label}
+                  {count > 0 && (
+                    <span className="tabular-nums opacity-80">{count > 99 ? "99+" : count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
-              return entries.map((entry, idx) => {
-                const isAnotacoesFav = entry.isFav;
-                if (entry.kind === "anotacoes") {
-                  return (
-                    <div key="anotacoes" className="relative group">
-                      <button
-                        onClick={() => { setNotesView(true); setClaraView(false); setSelectedChannelId(null); }}
-                        className={cn(
-                          "relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md text-[15px] transition-colors",
-                          notesView
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r-full before:bg-primary"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                        )}
-                        title="Suas anotações pessoais"
-                      >
-                        <div className="relative flex-shrink-0">
-                          {/* Stack visual — duas folhas atrás criando profundidade */}
-                          <span className="absolute -bottom-0.5 -right-0.5 w-11 h-11 rounded-md bg-amber-200/60 dark:bg-amber-900/40 rotate-3" />
-                          <span className="absolute -bottom-0.5 right-0 w-11 h-11 rounded-md bg-amber-300/70 dark:bg-amber-800/50 -rotate-2" />
-                          {/* Folha do topo com "linhas" de papel */}
-                          <div className="relative w-11 h-11 rounded-md bg-gradient-to-br from-amber-300 to-amber-400 dark:from-amber-500 dark:to-amber-700 shadow-md overflow-hidden flex items-center justify-center">
-                            <div className="absolute inset-0 flex flex-col justify-center gap-[3px] px-1.5 opacity-40">
-                              <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-3/4" />
-                              <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-full" />
-                              <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-2/3" />
-                              <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-5/6" />
-                            </div>
-                            <StickyNote className="relative w-5 h-5 text-amber-900 dark:text-amber-50 drop-shadow-sm" />
-                          </div>
-                        </div>
-                        <div className="flex-1 min-w-0 text-left">
-                          <div className="font-semibold truncate text-sm">Anotações</div>
-                          <p className="text-xs text-muted-foreground truncate">Bloco pessoal</p>
-                        </div>
-                      </button>
+        <div className="flex-1 overflow-y-auto">
+          {/* ─── Lista única de conversas ───
+              Canais oficiais, grupos, DMs, Clara e Anotações no mesmo fluxo,
+              ordenados por fixados → última atividade. */}
+          {(() => {
+            const ANOTACOES_KEY = "__anotacoes__";
+            const CLARA_KEY = "__clara__";
+            const BIRTHDAY_KEY = "__meu_aniversario__";
+
+            type Row = {
+              key: string;
+              kind: "clara" | "anotacoes" | "channel" | "birthday";
+              channel?: any;
+              sortTs: number;
+              isFav: boolean;
+              unread: number;
+              isGroup: boolean;
+              isChannel: boolean;
+              /** DM com alguém que faz aniversário hoje. */
+              isBday: boolean;
+            };
+
+            const ts = (c: any) =>
+              lastMessagesMap?.get(c.id)?.created_at
+                ? new Date(lastMessagesMap.get(c.id)!.created_at).getTime()
+                : new Date(c.created_at || 0).getTime();
+
+            const allChannels: any[] = [
+              ...publicChannels,
+              ...customGroups,
+              ...dms,
+              ...(omnxChannel ? [omnxChannel] : []),
+            ];
+
+            const rows: Row[] = allChannels.map((c) => ({
+              key: c.id,
+              kind: "channel" as const,
+              channel: c,
+              sortTs: ts(c),
+              isFav: favorites.has(c.id),
+              unread: unreadMap?.get(c.id) || 0,
+              isGroup: !c.is_dm && !c.is_system,
+              isChannel: !!c.is_system,
+              isBday: !!c.is_dm && isBirthdayToday((c as any).other_birth_date),
+            }));
+
+            rows.push({
+              key: ANOTACOES_KEY,
+              kind: "anotacoes",
+              sortTs: lastNoteActivity || 0,
+              isFav: favorites.has(ANOTACOES_KEY),
+              unread: 0,
+              isGroup: false,
+              isChannel: false,
+              isBday: false,
+            });
+
+            // Clara fica sempre no topo: é ferramenta, não conversa — ordená-la
+            // por "última atividade" a faria sumir no meio da lista.
+            if (aiEnabled) {
+              rows.unshift({
+                key: CLARA_KEY,
+                kind: "clara",
+                sortTs: Number.MAX_SAFE_INTEGER,
+                isFav: true,
+                unread: 0,
+                isGroup: false,
+                isChannel: false,
+                isBday: false,
+              });
+            }
+
+            // Cartão do MEU aniversário: aparece como se fosse uma mensagem
+            // chegando, ocupa o topo absoluto da lista e some sozinho quando o
+            // dia vira (ou quando a pessoa fecha no X).
+            if (myBirthdayToday && !birthdayCardDismissed) {
+              rows.unshift({
+                key: BIRTHDAY_KEY,
+                kind: "birthday",
+                sortTs: Number.MAX_SAFE_INTEGER,
+                isFav: false,
+                unread: 0,
+                isGroup: false,
+                isChannel: false,
+                isBday: true,
+              });
+            }
+
+            // Ordem: meu aniversário → Clara (ferramenta) → aniversariantes do
+            // dia → fixados → resto por última atividade. O aniversário sobe
+            // acima dos fixados de propósito: é um lembrete que vale por um dia
+            // só e some sozinho amanhã.
+            const rank = (r: Row) =>
+              r.kind === "birthday" ? -1 : r.kind === "clara" ? 0 : r.isBday ? 1 : r.isFav ? 2 : 3;
+            const sorted = rows.sort((a, b) => {
+              const ra = rank(a);
+              const rb = rank(b);
+              if (ra !== rb) return ra - rb;
+              return b.sortTs - a.sortTs;
+            });
+
+            const visible = sorted.filter((r) => {
+              // O cartão do próprio aniversário ignora os filtros: é um aviso
+              // do dia, não uma conversa que se classifica em "grupos" ou
+              // "não lidas".
+              if (r.kind === "birthday") return true;
+              if (chatFilter === "unread") return r.unread > 0;
+              if (chatFilter === "favorites") return r.isFav && r.kind !== "clara";
+              if (chatFilter === "groups") return r.isGroup;
+              if (chatFilter === "channels") return r.isChannel;
+              return true;
+            });
+
+            if (loadingChannels) {
+              return (
+                <div className="px-3 py-3 space-y-4">
+                  {Array.from({ length: 7 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg bg-sidebar-accent/60 animate-pulse flex-shrink-0" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3.5 w-1/3 rounded bg-sidebar-accent/60 animate-pulse" />
+                        <div className="h-3 w-2/3 rounded bg-sidebar-accent/40 animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            }
+
+            if (visible.length === 0) {
+              return (
+                <div className="px-6 py-10 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    {chatFilter === "unread"
+                      ? "Nenhuma conversa não lida."
+                      : chatFilter === "favorites"
+                        ? "Você ainda não fixou nenhuma conversa."
+                        : chatFilter === "groups"
+                          ? "Nenhum grupo por aqui."
+                          : chatFilter === "channels"
+                            ? "Nenhum canal disponível."
+                            : "Nenhuma conversa ainda."}
+                  </p>
+                </div>
+              );
+            }
+
+            return visible.map((row) => {
+              // ── Cartão do meu aniversário ──
+              // Chega como se fosse uma mensagem do GT3 para você: fica no topo
+              // durante o dia e some sozinho amanhã (ou no X, que só vale hoje).
+              if (row.kind === "birthday") {
+                return (
+                  <div key={row.key} className="px-1.5 pb-1">
+                    <div className="relative flex items-center gap-3 px-2.5 py-2.5 rounded-lg bg-gradient-to-r from-amber-200/90 via-amber-100/70 to-amber-50/30 dark:from-amber-500/25 dark:via-amber-500/12 dark:to-amber-500/5 ring-1 ring-amber-300/70 dark:ring-amber-500/30">
+                      <div className="w-12 h-12 rounded-full bg-amber-400/90 dark:bg-amber-500/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <span className="text-2xl leading-none" aria-hidden="true">🎂</span>
+                      </div>
+                      <div className="flex-1 min-w-0 pr-5">
+                        <p className="text-[15px] font-semibold text-amber-900 dark:text-amber-100 truncate">
+                          Feliz aniversário, {String(profile?.full_name || "").trim().split(/\s+/)[0] || "você"}!
+                        </p>
+                        <p className="text-[13px] text-amber-800/80 dark:text-amber-200/70 truncate">
+                          Hoje é o seu dia — o time inteiro está vendo isso. 🎉
+                        </p>
+                      </div>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate({ channelId: ANOTACOES_KEY, favorite: !isAnotacoesFav }); }}
-                        className={cn(
-                          "absolute top-1.5 right-1.5 p-1 rounded transition-opacity",
-                          isAnotacoesFav ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                          "hover:bg-background/60"
-                        )}
-                        title={isAnotacoesFav ? "Desafixar" : "Fixar"}
+                        onClick={dismissBirthdayCard}
+                        className="absolute top-1.5 right-1.5 p-1 rounded text-amber-800/60 dark:text-amber-200/60 hover:bg-amber-300/40 dark:hover:bg-amber-500/20"
+                        title="Dispensar por hoje"
+                        aria-label="Dispensar o aviso de aniversário"
                       >
-                        <Pin className={cn("w-3.5 h-3.5", isAnotacoesFav ? "text-amber-500 fill-amber-500" : "text-muted-foreground")} />
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                  );
-                }
-                // Renderiza canal/grupo/DM/omnx-bot. Para omnx-bot usa visual especial.
-                const c = entry.channel as any;
-                const isOmnx = c.name === "omnx-bot" && c.is_system;
-                const isFav = favorites.has(c.id);
-                const isSelected = !notesView && selectedChannelId === c.id;
-                const last = lastMessagesMap?.get(c.id);
-                const unread = unreadMap?.get(c.id) || 0;
-                return (
-                  <div key={c.id} className="relative group">
-                    <button
-                      onClick={() => selectChannel(c.id)}
-                      className={cn(
-                        "relative w-full flex items-center gap-3 px-2.5 py-2.5 rounded-md text-[15px] transition-colors",
-                        isSelected
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-r-full before:bg-primary"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                      )}
-                      title={c.name}
-                    >
-                      {isOmnx ? (
-                        <div className="relative flex-shrink-0">
-                          <div className="w-11 h-11 rounded-md bg-gradient-to-br from-primary to-primary/70 text-primary-foreground flex items-center justify-center shadow-sm">
-                            <Sparkles className="w-5 h-5" />
-                          </div>
-                          <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-card border border-border flex items-center justify-center">
-                            <span className="text-[8px] font-bold text-primary">AI</span>
-                          </span>
-                        </div>
-                      ) : c.is_dm ? (
-                        <AvatarBadge
-                          name={(c as any).display_name || c.name}
-                          avatarUrl={(c as any).display_avatar}
-                          size="md"
-                        />
-                      ) : c.avatar_url ? (
-                        <img src={c.avatar_url} alt={c.name} className="w-11 h-11 rounded-md object-cover border border-border flex-shrink-0" />
-                      ) : (
-                        <ChannelAvatar name={c.name} size="lg" />
-                      )}
-                      <div className="flex-1 min-w-0 text-left">
-                        <div className={cn(
-                          "flex items-center justify-between gap-2",
-                          // Reserva espaço à direita pro botão de pin (fixar) não
-                          // sobrepor o badge de não-lidas. Fixo quando o canal está
-                          // fixado (pin sempre visível) e no hover quando não está
-                          // (o pin surge no group-hover).
-                          unread > 0 && !isSelected && (isFav ? "pr-7" : "group-hover:pr-7")
-                        )}>
-                          <span className={cn(
-                            "truncate text-sm flex items-center gap-1.5",
-                            unread > 0 && !isSelected ? "font-semibold" : "font-medium",
-                            !c.is_dm && !isOmnx && "capitalize"
-                          )}>
-                            <span className="truncate">
-                              {isOmnx
-                                ? "OMNX Bot"
-                                : c.is_dm
-                                  ? ((c as any).display_name || "Conversa")
-                                  : c.name}
-                            </span>
-                            {mutedSet?.has(c.id) && (
-                              <BellOff className={cn(
-                                "w-[16px] h-[16px] flex-shrink-0",
-                                isSelected ? "text-sidebar-accent-foreground" : "text-muted-foreground"
-                              )} aria-label="Silenciado" />
-                            )}
-                          </span>
-                          {unread > 0 && !isSelected && (
-                            <span className="text-[11px] font-semibold bg-destructive text-destructive-foreground rounded-full px-1.5 py-0.5 min-w-[18px] text-center tabular-nums flex-shrink-0">
-                              {unread > 99 ? "99+" : unread}
-                            </span>
-                          )}
-                        </div>
-                        {c.is_dm && isBirthdayToday((c as any).other_birth_date) && (
-                          <p className="text-xs truncate flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400">
-                            <span aria-hidden="true">🎉</span>
-                            <span className="truncate">Hoje é meu aniversário!</span>
-                          </p>
-                        )}
-                        {isOmnx && omnxThinking && isSelected ? (
-                          <p className={cn(
-                            "text-xs truncate",
-                            isSelected ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                          )}>Pensando...</p>
-                        ) : draftsByChannel[c.id] && !isSelected ? (
-                          <p className={cn(
-                            "text-xs truncate flex items-center gap-1",
-                            isSelected ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                          )}>
-                            <span className="text-amber-600 dark:text-amber-400 font-semibold">rascunho:</span>
-                            <span className="truncate">{draftsByChannel[c.id].slice(0, 30)}</span>
-                          </p>
-                        ) : last ? (() => {
-                          // Ícone + rótulo do tipo de anexo (imagem/vídeo/áudio/arquivo/etc)
-                          // exibidos no preview da sidebar, para o card indicar visualmente
-                          // o que foi enviado mesmo quando não é texto.
-                          const atts = Array.isArray(last.attachments) ? last.attachments : [];
-                          const firstAtt = atts[0];
-                          const attType = (firstAtt?.type || "") as string;
-                          let AttIcon: typeof ImageIcon | null = null;
-                          let attLabel = "";
-                          if (firstAtt) {
-                            if (attType.startsWith("image/")) { AttIcon = ImageIcon; attLabel = "Imagem"; }
-                            else if (attType.startsWith("video/")) { AttIcon = Video; attLabel = "Vídeo"; }
-                            else if (attType.startsWith("audio/")) { AttIcon = Mic; attLabel = "Áudio"; }
-                            else if (attType === "task") { AttIcon = CheckSquare; attLabel = "Tarefa"; }
-                            else if (attType === "meeting_invite") { AttIcon = Video; attLabel = "Reunião"; }
-                            else if (attType === "huddle") { AttIcon = PhoneIcon; attLabel = "Chamada"; }
-                            else if (attType === "poll") { AttIcon = BarChart3; attLabel = "Enquete"; }
-                            else if (attType === "feed_post") { AttIcon = Megaphone; attLabel = "Publicação"; }
-                            else { AttIcon = Paperclip; attLabel = "Anexo"; }
-                          }
-                          // Se a mensagem tem legenda de texto, mostra a legenda; senão o rótulo do tipo.
-                          const placeholderRe = /^(\[imagem\]|\[vídeo\]|\[áudio\]|\[anexo\])$/i;
-                          const caption = (!last.content || placeholderRe.test(last.content)) ? "" : last.content;
-                          const previewText = (caption || attLabel || last.content || "").slice(0, 28);
-                          // Indicador de status (apenas em DMs, quando a última msg é minha), estilo WhatsApp:
-                          //   ✓ cinza      → enviado (ainda não entregue)
-                          //   ✓✓ cinza     → entregue (a outra pessoa está/esteve online após o envio)
-                          //   ✓✓ azul      → lido (last_read_at da outra pessoa ≥ horário da msg)
-                          const isMyLast = last.author_id === profile?.user_id;
-                          const showReadTicks = c.is_dm && isMyLast && !isOmnx;
-                          const sentMs = new Date(last.created_at).getTime();
-                          const otherReadAt = othersReadsMap?.get(c.id) ?? null;
-                          const wasRead = !!otherReadAt && new Date(otherReadAt).getTime() >= sentMs;
-                          const otherId = (c as any).other_user_id as string | undefined;
-                          const pres = otherId ? presence?.get(otherId) : undefined;
-                          const wasDelivered = wasRead || !!pres?.online
-                            || (!!pres?.lastSeenAt && new Date(pres.lastSeenAt).getTime() >= sentMs);
-                          return (
-                            <p className={cn(
-                              "text-xs truncate flex items-center justify-between gap-1",
-                              isSelected ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                            )}>
-                              <span className="flex items-center gap-1 min-w-0">
-                                <span className="font-medium flex-shrink-0">
-                                  {isMyLast
-                                    ? "Você"
-                                    : isOmnx
-                                      ? "OMNX"
-                                      : (last.author_name?.split(" ")[0] || "—")}
-                                  :
-                                </span>
-                                {AttIcon && <AttIcon className="w-3.5 h-3.5 flex-shrink-0 opacity-70" aria-label={attLabel} />}
-                                <span className="truncate">{previewText}</span>
-                              </span>
-                              <span className="flex items-center gap-1 flex-shrink-0">
-                                {showReadTicks && (
-                                  wasRead ? (
-                                    <CheckCheck className="w-3.5 h-3.5 text-sky-500" aria-label="Lido" />
-                                  ) : wasDelivered ? (
-                                    <CheckCheck className="w-3.5 h-3.5 opacity-60" aria-label="Entregue" />
-                                  ) : (
-                                    <Check className="w-3.5 h-3.5 opacity-60" aria-label="Enviado" />
-                                  )
-                                )}
-                                <span className="text-[11px] tabular-nums opacity-70">
-                                  {formatChatPreviewTime(last.created_at)}
-                                </span>
-                              </span>
-                            </p>
-                          );
-                        })() : (
-                          <p className={cn(
-                            "text-xs truncate",
-                            isSelected ? "text-sidebar-accent-foreground/70" : "text-muted-foreground"
-                          )}>
-                            {isOmnx ? "Assistente operacional" : c.is_dm ? "Sem mensagens" : "—"}
-                          </p>
-                        )}
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); toggleFavorite.mutate({ channelId: c.id, favorite: !isFav }); }}
-                      className={cn(
-                        "absolute top-1.5 right-1.5 p-1 rounded transition-opacity",
-                        isFav ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                        "hover:bg-background/60"
-                      )}
-                      title={isFav ? "Desafixar" : "Fixar"}
-                    >
-                      <Pin className={cn("w-3.5 h-3.5", isFav ? "text-amber-500 fill-amber-500" : "text-muted-foreground")} />
-                    </button>
                   </div>
                 );
-              });
-            })()}
-            </>}
-          </div>
+              }
+
+              // ── Clara ──
+              if (row.kind === "clara") {
+                return (
+                  <ChatListRow
+                    key={row.key}
+                    selected={claraView}
+                    onClick={() => {
+                      setClaraView(true);
+                      setNotesView(false);
+                      setSelectedChannelId(null);
+                      if (window.location.pathname !== "/chat") {
+                        window.history.replaceState({}, "", "/chat");
+                        notifyPathChange();
+                      }
+                    }}
+                    avatar={
+                      <div className="relative flex-shrink-0">
+                        <div className="w-12 h-12 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                          <CamiAvatar className="w-[22px] h-[22px]" />
+                        </div>
+                        <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-card border border-border flex items-center justify-center">
+                          <span className="text-[8px] font-bold text-primary">IA</span>
+                        </span>
+                      </div>
+                    }
+                    title="Clara"
+                    preview={<span className="truncate">Assistente de IA</span>}
+                  />
+                );
+              }
+
+              // ── Anotações ──
+              if (row.kind === "anotacoes") {
+                return (
+                  <ChatListRow
+                    key={row.key}
+                    selected={notesView}
+                    onClick={() => { setNotesView(true); setClaraView(false); setSelectedChannelId(null); }}
+                    title="Anotações"
+                    preview={<span className="truncate">Bloco pessoal</span>}
+                    pinned={row.isFav}
+                    onTogglePin={() => toggleFavorite.mutate({ channelId: ANOTACOES_KEY, favorite: !row.isFav })}
+                    avatar={
+                      <div className="relative flex-shrink-0">
+                        {/* Stack visual — duas folhas atrás criando profundidade */}
+                        <span className="absolute -bottom-0.5 -right-0.5 w-12 h-12 rounded-lg bg-amber-200/60 dark:bg-amber-900/40 rotate-3" />
+                        <span className="absolute -bottom-0.5 right-0 w-12 h-12 rounded-lg bg-amber-300/70 dark:bg-amber-800/50 -rotate-2" />
+                        <div className="relative w-12 h-12 rounded-lg bg-gradient-to-br from-amber-300 to-amber-400 dark:from-amber-500 dark:to-amber-700 shadow-md overflow-hidden flex items-center justify-center">
+                          <div className="absolute inset-0 flex flex-col justify-center gap-[3px] px-2 opacity-40">
+                            <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-3/4" />
+                            <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-full" />
+                            <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-2/3" />
+                            <span className="block h-[2px] rounded-full bg-amber-900/80 dark:bg-amber-50/80 w-5/6" />
+                          </div>
+                          <StickyNote className="relative w-[22px] h-[22px] text-amber-900 dark:text-amber-50 drop-shadow-sm" />
+                        </div>
+                      </div>
+                    }
+                  />
+                );
+              }
+
+              // ── Canal / grupo / DM ──
+              const c = row.channel;
+              const isOmnx = c.name === "omnx-bot" && c.is_system;
+              const isSelected = !notesView && !claraView && selectedChannelId === c.id;
+              const last = lastMessagesMap?.get(c.id);
+              const unread = row.unread;
+
+              // Pessoa → círculo; grupo/canal → quadrado arredondado. É a
+              // distinção visual que o GT3 já usava e que continua valendo: o
+              // formato do avatar diz, antes da leitura, se é gente ou espaço.
+              const avatar = isOmnx ? (
+                <div className="relative flex-shrink-0">
+                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground flex items-center justify-center shadow-sm">
+                    <Sparkles className="w-[22px] h-[22px]" />
+                  </div>
+                  <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-card border border-border flex items-center justify-center">
+                    <span className="text-[8px] font-bold text-primary">AI</span>
+                  </span>
+                </div>
+              ) : c.is_dm ? (
+                <AvatarBadge
+                  name={(c as any).display_name || c.name}
+                  avatarUrl={(c as any).display_avatar}
+                  size="lg"
+                  className="w-12 h-12 flex-shrink-0"
+                />
+              ) : c.avatar_url ? (
+                <img src={c.avatar_url} alt={c.name} className="w-12 h-12 rounded-lg object-cover border border-border flex-shrink-0" />
+              ) : (
+                <ChannelAvatar name={c.name} size="xl" />
+              );
+
+              const title = isOmnx
+                ? "OMNX Bot"
+                : c.is_dm
+                  ? ((c as any).display_name || "Conversa")
+                  : c.name;
+
+              // ── Prévia da última linha ──
+              let preview: React.ReactNode;
+              const activity = typingByChannel.get(c.id);
+              if (c.is_dm && isBirthdayToday((c as any).other_birth_date)) {
+                preview = (
+                  <span className="truncate flex items-center gap-1 font-medium text-amber-600 dark:text-amber-400">
+                    <span aria-hidden="true">🎉</span>
+                    <span className="truncate">Aniversário hoje</span>
+                  </span>
+                );
+              } else if (activity) {
+                // Alguém digitando/gravando vence o preview: é informação do
+                // agora, o preview é do passado.
+                const isAudioAct = activity.action === "recording_audio" || activity.action === "uploading_audio";
+                const actLabel = activity.action === "uploading_image" ? "enviando uma foto"
+                  : activity.action === "uploading_video" ? "enviando um vídeo"
+                  : activity.action === "uploading_audio" ? "enviando um áudio"
+                  : activity.action === "uploading_file" ? "enviando um arquivo"
+                  : activity.action === "recording_audio" ? "gravando um áudio"
+                  : "digitando";
+                preview = (
+                  <span className="truncate flex items-center gap-1.5 text-primary">
+                    {isAudioAct ? (
+                      <Mic className="chat-mic-pulse w-3.5 h-3.5 flex-shrink-0" />
+                    ) : (
+                      <span className="flex items-center gap-0.5 flex-shrink-0" aria-hidden>
+                        <span className="chat-typing-dot h-1 w-1 rounded-full bg-primary" />
+                        <span className="chat-typing-dot h-1 w-1 rounded-full bg-primary" />
+                        <span className="chat-typing-dot h-1 w-1 rounded-full bg-primary" />
+                      </span>
+                    )}
+                    <span className="truncate font-medium">
+                      {c.is_dm ? actLabel : `${activity.name.split(" ")[0]} ${actLabel}`}
+                    </span>
+                  </span>
+                );
+              } else if (isOmnx && omnxThinking && isSelected) {
+                preview = <span className="truncate">Pensando...</span>;
+              } else if (draftsByChannel[c.id] && !isSelected) {
+                preview = (
+                  <span className="truncate flex items-center gap-1">
+                    <span className="text-amber-600 dark:text-amber-400 font-semibold flex-shrink-0">rascunho:</span>
+                    <span className="truncate">{draftsByChannel[c.id].slice(0, 40)}</span>
+                  </span>
+                );
+              } else if (last) {
+                // Ícone + rótulo do tipo de anexo, para o card indicar o que foi
+                // enviado mesmo quando a mensagem não é texto.
+                const atts = Array.isArray(last.attachments) ? last.attachments : [];
+                const firstAtt = atts[0];
+                const attType = (firstAtt?.type || "") as string;
+                let AttIcon: typeof ImageIcon | null = null;
+                let attLabel = "";
+                if (firstAtt) {
+                  if (attType.startsWith("image/")) { AttIcon = ImageIcon; attLabel = "Imagem"; }
+                  else if (attType.startsWith("video/")) { AttIcon = Video; attLabel = "Vídeo"; }
+                  else if (attType.startsWith("audio/")) { AttIcon = Mic; attLabel = "Áudio"; }
+                  else if (attType === "task") { AttIcon = CheckSquare; attLabel = "Tarefa"; }
+                  else if (attType === "meeting_invite") { AttIcon = Video; attLabel = "Reunião"; }
+                  else if (attType === "huddle") { AttIcon = PhoneIcon; attLabel = "Chamada"; }
+                  else if (attType === "poll") { AttIcon = BarChart3; attLabel = "Enquete"; }
+                  else if (attType === "feed_post") { AttIcon = Megaphone; attLabel = "Publicação"; }
+                  else { AttIcon = Paperclip; attLabel = "Anexo"; }
+                }
+                const placeholderRe = /^(\[imagem\]|\[vídeo\]|\[áudio\]|\[anexo\])$/i;
+                const caption = (!last.content || placeholderRe.test(last.content)) ? "" : last.content;
+                const previewText = (caption || attLabel || last.content || "").slice(0, 60);
+                // Status da minha última mensagem em DM, estilo WhatsApp:
+                //   ✓ cinza  → enviado · ✓✓ cinza → entregue · ✓✓ azul → lido
+                const isMyLast = last.author_id === profile?.user_id;
+                const showReadTicks = c.is_dm && isMyLast && !isOmnx;
+                const sentMs = new Date(last.created_at).getTime();
+                const otherReadAt = othersReadsMap?.get(c.id) ?? null;
+                const wasRead = !!otherReadAt && new Date(otherReadAt).getTime() >= sentMs;
+                const otherId = (c as any).other_user_id as string | undefined;
+                const pres = otherId ? presence?.get(otherId) : undefined;
+                const wasDelivered = wasRead || !!pres?.online
+                  || (!!pres?.lastSeenAt && new Date(pres.lastSeenAt).getTime() >= sentMs);
+                // Quem falou: em DM os ticks já dizem que a última é minha, então
+                // o prefixo só aparece quando não há ticks.
+                const authorPrefix = isMyLast
+                  ? "Você:"
+                  : isOmnx
+                    ? "OMNX:"
+                    : c.is_dm
+                      ? ""
+                      : `${last.author_name?.split(" ")[0] || "—"}:`;
+                preview = (
+                  <span className="flex items-center gap-1 min-w-0">
+                    {showReadTicks && (
+                      wasRead ? (
+                        <CheckCheck className="w-4 h-4 flex-shrink-0 text-chat-check-read" strokeWidth={2.75} aria-label="Lido" />
+                      ) : wasDelivered ? (
+                        <CheckCheck className="w-4 h-4 flex-shrink-0 opacity-60" aria-label="Entregue" />
+                      ) : (
+                        <Check className="w-4 h-4 flex-shrink-0 opacity-60" aria-label="Enviado" />
+                      )
+                    )}
+                    {!showReadTicks && authorPrefix && (
+                      <span className="flex-shrink-0">{authorPrefix}</span>
+                    )}
+                    {AttIcon && <AttIcon className="w-3.5 h-3.5 flex-shrink-0 opacity-70" aria-label={attLabel} />}
+                    <span className="truncate">{previewText}</span>
+                  </span>
+                );
+              } else {
+                preview = (
+                  <span className="truncate">
+                    {isOmnx ? "Assistente operacional" : c.is_dm ? "Sem mensagens" : "Nenhuma mensagem ainda"}
+                  </span>
+                );
+              }
+
+              return (
+                <ChatListRow
+                  key={row.key}
+                  selected={isSelected}
+                  onClick={() => selectChannel(c.id)}
+                  avatar={avatar}
+                  title={title}
+                  titleClassName={!c.is_dm && !isOmnx ? "capitalize" : undefined}
+                  time={last ? formatChatPreviewTime(last.created_at) : undefined}
+                  unread={unread}
+                  muted={mutedSet?.has(c.id)}
+                  preview={preview}
+                  pinned={row.isFav}
+                  onTogglePin={() => toggleFavorite.mutate({ channelId: c.id, favorite: !row.isFav })}
+                  birthday={row.isBday}
+                  onCongratulate={row.isBday ? () => congratulate(c) : undefined}
+                />
+              );
+            });
+          })()}
         </div>
+
+        {/* FAB de nova conversa (mobile). O único ponto de entrada até agora
+            era um "+" de ~24px escondido ao lado do título de uma seção — alvo
+            pequeno demais e sem nenhuma pista visual de que ali se começa uma
+            conversa. Ancorado no <aside>, que já termina acima da BottomNav. */}
+        {isAdmin || isManager ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="md:hidden absolute bottom-4 right-4 z-20 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center active:scale-95 transition-transform"
+                aria-label="Nova conversa"
+              >
+                <MessageSquarePlus className="w-6 h-6" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="top" className="w-48">
+              <DropdownMenuItem onSelect={() => setDmOpen(true)}>
+                <MessageSquare className="w-4 h-4 mr-2" /> Nova conversa
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+                <Users className="w-4 h-4 mr-2" /> Criar grupo
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setDmOpen(true)}
+            className="md:hidden absolute bottom-4 right-4 z-20 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center active:scale-95 transition-transform"
+            aria-label="Nova conversa"
+          >
+            <MessageSquarePlus className="w-6 h-6" />
+          </button>
+        )}
       </aside>
+
+                {/* Input de avatar do canal — vive AQUI, fora do painel de detalhes.
+          Antes morava dentro de `{infoPanelOpen && ...}`, que só monta em telas
+          grandes: no celular o "Trocar foto" do diálogo de edição chamava
+          getElementById e não achava nada, falhando calado. */}
+      <input
+        id="channel-avatar-input"
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={async (ev) => {
+          const f = ev.target.files?.[0];
+          if (!f || !channel) return;
+          setUploadingAvatar(true);
+          try {
+            const url = await uploadChannelAvatar(channel.id, f);
+            await updateChannel.mutateAsync({ id: channel.id, avatar_url: url });
+            toast.success("Foto atualizada");
+          } catch (e: any) {
+            toast.error(e.message || "Erro ao enviar foto");
+          } finally {
+            setUploadingAvatar(false);
+            ev.target.value = "";
+          }
+        }}
+      />
 
       {/* ─── Conteúdo Principal ─── */}
       <main className={cn(
-        "flex-1 flex flex-col min-w-0",
+        "flex-1 flex flex-col min-w-0 min-h-0",
         !selectedChannelId && !notesView && !claraView && "hidden md:flex"
       )}>
         {claraView && aiEnabled ? (
@@ -1755,8 +2193,8 @@ export default function Chat() {
         {channel && (
           <div className="px-3 md:px-6 py-3 border-b border-border bg-card">
             <div className="flex items-center justify-between gap-3">
-              {/* Avatar + nome + status/cargo */}
-              <div className="flex items-center gap-2 md:gap-3 min-w-0">
+              {/* Voltar (mobile) + identidade da conversa */}
+              <div className="flex items-center gap-1 md:gap-2 min-w-0 flex-1">
                 <button
                   type="button"
                   onClick={() => { setSelectedChannelId(null); navigate("/chat"); }}
@@ -1765,73 +2203,87 @@ export default function Chat() {
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
-                {channel.is_dm ? (
-                  <div className="relative flex-shrink-0">
-                    <AvatarBadge
-                      name={(channel as any).display_name || channel.name}
-                      avatarUrl={(channel as any).display_avatar}
-                      size="md"
+                {/* Avatar + nome + status formam UM alvo clicável só, como no
+                    WhatsApp: tocar em qualquer parte da identidade abre os dados
+                    da conversa. Antes o único ponto de entrada era o "N membros"
+                    — um link de 12px que não parecia clicável, e que nem existia
+                    em DMs. Precisa ser um <button> ÚNICO (nada de button dentro
+                    de button, que é HTML inválido e quebra o teclado). */}
+                <button
+                  type="button"
+                  onClick={() => { if (isMobile) setInfoDrawerOpen(true); else setInfoPanelOpen(true); }}
+                  className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 text-left rounded-md px-1 -mx-1 py-0.5 hover:bg-muted/60 transition-colors"
+                  aria-label={`Ver dados de ${channel.is_dm ? (channel.display_name || "conversa") : channel.name}`}
+                >
+                  {channel.is_dm ? (
+                    <div className="relative flex-shrink-0">
+                      <AvatarBadge
+                        name={channel.display_name || channel.name}
+                        avatarUrl={channel.display_avatar}
+                        size="md"
+                      />
+                      {channel.other_user_id && presence?.get(channel.other_user_id)?.online && (
+                        <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-success rounded-full ring-2 ring-card" />
+                      )}
+                    </div>
+                  ) : channel.avatar_url ? (
+                    <img
+                      src={channel.avatar_url}
+                      alt=""
+                      className="w-9 h-9 rounded-md object-cover flex-shrink-0 border border-border"
                     />
-                    {(channel as any).other_user_id && presence?.get((channel as any).other_user_id)?.online && (
-                      <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full ring-2 ring-card" />
-                    )}
-                  </div>
-                ) : channel.avatar_url ? (
-                  <img
-                    src={channel.avatar_url}
-                    alt={channel.name}
-                    className="w-9 h-9 rounded-md object-cover flex-shrink-0 border border-border"
-                  />
-                ) : (
-                  <ChannelAvatar name={channel.name} size="md" />
-                )}
-                <div className="min-w-0">
-                  <div className="flex items-baseline gap-2">
+                  ) : (
+                    <ChannelAvatar name={channel.name} size="md" />
+                  )}
+                  <div className="min-w-0">
                     <h1 className={cn(
-                      "text-base font-semibold text-foreground truncate",
+                      "text-base font-semibold text-foreground truncate leading-tight",
                       !channel.is_dm && "capitalize"
                     )}>
                       {channel.is_dm
-                        ? ((channel as any).display_name || "Conversa")
+                        ? (channel.display_name || "Conversa")
                         : channel.name}
                     </h1>
-                    {channel.is_dm && (channel as any).other_user_id && (() => {
-                      const p = presence?.get((channel as any).other_user_id);
-                      return (
-                        <span className="text-xs text-muted-foreground italic whitespace-nowrap flex items-center gap-1.5">
-                          {p?.online && <span className="w-1.5 h-1.5 rounded-full bg-green-500" />}
-                          {p?.online
-                            ? "online · agora"
-                            : `visto por último ${formatLastSeen(p?.lastSeenAt)}`}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  {channel.is_dm
-                    ? (() => {
-                        const otherId = (channel as any).other_user_id;
-                        const emp = otherId ? (employees || []).find((e) => e.user_id === otherId) : null;
-                        const parts: string[] = [];
-                        if (emp?.position_title) parts.push(emp.position_title);
-                        const team = emp?.subarea_name || emp?.area_name;
-                        if (team) parts.push(team);
+                    {/* Segunda linha: presença na DM, contagem de membros no grupo.
+                        O status saiu de ao lado do nome para debaixo dele — em
+                        telas estreitas os dois competiam pela mesma linha e o
+                        nome era truncado cedo demais. */}
+                    {channel.is_dm ? (() => {
+                      const otherId = channel.other_user_id;
+                      const p = otherId ? presence?.get(otherId) : undefined;
+                      if (p?.online) {
                         return (
-                          <p className="text-xs text-muted-foreground truncate">
-                            {parts.length > 0 ? parts.join(" · ") : "Mensagem direta"}
+                          <p className="text-xs text-success truncate flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-success flex-shrink-0" />
+                            online
                           </p>
                         );
-                      })()
-                    : <button
-                        type="button"
-                        onClick={() => setInfoPanelOpen(true)}
-                        className="text-xs text-muted-foreground truncate hover:text-foreground transition-colors text-left"
-                        title="Ver membros"
-                      >
+                      }
+                      if (p?.lastSeenAt) {
+                        return (
+                          <p className="text-xs text-muted-foreground truncate">
+                            visto por último {formatLastSeen(p.lastSeenAt)}
+                          </p>
+                        );
+                      }
+                      const emp = otherId ? (employees || []).find((e) => e.user_id === otherId) : null;
+                      const parts: string[] = [];
+                      if (emp?.position_title) parts.push(emp.position_title);
+                      const team = emp?.subarea_name || emp?.area_name;
+                      if (team) parts.push(team);
+                      return (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {parts.length > 0 ? parts.join(" · ") : "Mensagem direta"}
+                        </p>
+                      );
+                    })() : (
+                      <p className="text-xs text-muted-foreground truncate">
                         {members.length} membro{members.length !== 1 ? "s" : ""}
                         {channel.description && ` · ${channel.description}`}
-                      </button>
-                  }
-                </div>
+                      </p>
+                    )}
+                  </div>
+                </button>
               </div>
 
               {/* Ações */}
@@ -1926,20 +2378,76 @@ export default function Chat() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="hidden md:inline-flex h-8 w-8 p-0 text-muted-foreground"
-                    onClick={() => setSearchOpen(true)}
+                    className="h-8 w-8 p-0 text-muted-foreground"
+                    onClick={() => { if (isMobile) setInfoDrawerOpen(true); else setSearchOpen(true); }}
                     title="Buscar"
+                    aria-label="Buscar nesta conversa"
                   >
                     <Search className="w-3.5 h-3.5" />
                   </Button>
+                )}
+                {/* Silenciar — atalho direto no header (grupo e DM). Antes só
+                    existia enterrado no painel de detalhes e ninguém achava. */}
+                {isCurrentMuted ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-primary bg-primary/10 hover:bg-primary/20"
+                    onClick={() => {
+                      if (!selectedChannelId) return;
+                      toggleMute.mutate({ channelId: selectedChannelId, mute: false });
+                    }}
+                    disabled={toggleMute.isPending}
+                    title="Silenciado · clique para reativar as notificações"
+                    aria-label="Reativar notificações desta conversa"
+                  >
+                    <BellOff className="w-4 h-4" />
+                  </Button>
+                ) : (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground"
+                        disabled={toggleMute.isPending}
+                        title="Silenciar conversa"
+                        aria-label="Silenciar esta conversa"
+                      >
+                        <Bell className="w-4 h-4" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-56 p-1">
+                      <div className="text-2xs font-medium text-muted-foreground uppercase tracking-wide px-2 py-1.5">
+                        Silenciar por
+                      </div>
+                      {MUTE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.label}
+                          onClick={() => {
+                            if (!selectedChannelId) return;
+                            toggleMute.mutate({
+                              channelId: selectedChannelId,
+                              mute: true,
+                              durationHours: opt.h,
+                            });
+                          }}
+                          className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-muted transition-colors"
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
                 )}
                 {!channel.is_dm && (
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="hidden md:flex h-8 gap-1 px-2 text-xs text-muted-foreground"
-                    onClick={() => setInfoPanelOpen(true)}
+                    className="flex h-8 gap-1 px-2 text-xs text-muted-foreground"
+                    onClick={() => { if (isMobile) setInfoDrawerOpen(true); else setInfoPanelOpen(true); }}
                     title="Ver membros"
+                    aria-label={`Ver os ${members.length} membros do grupo`}
                   >
                     <Users className="w-3.5 h-3.5" /> {members.length}
                   </Button>
@@ -1947,9 +2455,9 @@ export default function Chat() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setInfoPanelOpen((v) => !v)}
+                  onClick={() => { if (isMobile) setInfoDrawerOpen(true); else setInfoPanelOpen((v) => !v); }}
                   className={cn(
-                    "hidden md:flex h-8 w-8 p-0",
+                    "flex h-8 w-8 p-0",
                     infoPanelOpen ? "text-primary bg-primary/10" : "text-muted-foreground"
                   )}
                   title={infoPanelOpen ? "Fechar detalhes" : "Detalhes da conversa"}
@@ -2001,6 +2509,27 @@ export default function Chat() {
               </div>
             )}
 
+            {/* Aviso de aniversário — dentro da conversa, para quem abriu a DM
+                sem passar pela lista. Só aparece no dia e some sozinho. */}
+            {channel?.is_dm && isBirthdayToday((channel as any).other_birth_date) && (
+              <div className="border-b border-amber-300/60 dark:border-amber-500/25 bg-gradient-to-r from-amber-100/90 to-amber-50/50 dark:from-amber-500/15 dark:to-amber-500/5 px-4 py-2 flex items-center gap-2.5">
+                <span className="text-base leading-none flex-shrink-0" aria-hidden="true">🎂</span>
+                <p className="flex-1 min-w-0 truncate text-[13px] font-medium text-amber-900 dark:text-amber-200">
+                  Hoje é aniversário de{" "}
+                  <strong className="font-semibold">
+                    {String((channel as any).display_name || "").trim().split(/\s+/)[0] || "quem está do outro lado"}
+                  </strong>
+                </p>
+                <button
+                  type="button"
+                  onClick={() => congratulate(channel)}
+                  className="flex-shrink-0 h-7 px-2.5 rounded-full bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors"
+                >
+                  Parabenizar
+                </button>
+              </div>
+            )}
+
             {/* Barra de mensagem fixada */}
             {pinned.length > 0 && (
               <div className="border-b border-border bg-amber-50 dark:bg-amber-950/30 px-4 py-2 flex items-center gap-2">
@@ -2026,12 +2555,14 @@ export default function Chat() {
                 </button>
               </div>
             )}
+            {/* Wrapper posicionado: o botão de "voltar ao fim" flutua sobre a
+                lista e precisa de um ancestral `relative` que tenha a altura
+                dela. */}
+            <div className="relative flex-1 min-h-0 flex flex-col">
             <div
-              className="flex-1 overflow-y-auto px-3 md:px-6 py-4 space-y-1"
-              style={{
-                backgroundImage: "radial-gradient(circle at 100% 0%, hsl(var(--primary)/0.04), transparent 60%), radial-gradient(circle at 0% 100%, hsl(var(--primary)/0.03), transparent 50%)",
-                backgroundColor: "hsl(var(--background))",
-              }}
+              ref={messagesScrollRef}
+              onScroll={handleMessagesScroll}
+              className="chat-canvas flex-1 min-h-0 overflow-y-auto px-3 md:px-6 py-4 space-y-1"
             >
               {hasMore && messages.length > 0 && (
                 <div className="flex justify-center py-2">
@@ -2043,7 +2574,36 @@ export default function Chat() {
                   </button>
                 </div>
               )}
-              {messages.length === 0 ? (
+              {loadingMessages ? (
+                // Esqueleto de conversa: dá para ver que ALGO está vindo, em vez
+                // de olhar para um "seja o primeiro a falar" que pode ser falso.
+                <div className="py-4 space-y-4" aria-busy="true" aria-label="Carregando mensagens">
+                  {[68, 45, 80, 52, 72].map((w, i) => (
+                    <div key={i} className={cn("flex gap-2", i % 2 ? "justify-end" : "justify-start")}>
+                      {i % 2 === 0 && <div className="w-8 h-8 rounded-full bg-muted animate-pulse flex-shrink-0" />}
+                      <div
+                        className="h-14 rounded-2xl bg-muted animate-pulse max-w-[75%]"
+                        style={{ width: `${w}%` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : messagesError ? (
+                <div className="flex-1 flex flex-col items-center justify-center py-12 px-6 text-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center">
+                    <X className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1">
+                    <h2 className="text-base font-semibold text-foreground">Não consegui carregar as mensagens</h2>
+                    <p className="text-sm text-muted-foreground max-w-xs">
+                      A conexão falhou no meio do caminho. Suas mensagens estão salvas — é só tentar de novo.
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => refetchMessages()}>
+                    Tentar de novo
+                  </Button>
+                </div>
+              ) : messages.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center py-12 px-6 text-center gap-3">
                   {channel?.is_dm ? (
                     <>
@@ -2117,7 +2677,7 @@ export default function Chat() {
                     <div key={m.id}>
                       {showDay && (
                         <div className="sticky top-0 z-10 flex items-center justify-center my-4 pointer-events-none">
-                          <span className="text-2xs text-muted-foreground bg-background/95 backdrop-blur px-3 py-1 rounded-full border border-border tabular-nums shadow-sm">
+                          <span className="text-2xs text-chat-meta bg-chat-bubble-in/95 backdrop-blur px-3 py-1 rounded-full tabular-nums shadow-sm">
                             {formatChatDayLabel(m.created_at) || format(new Date(m.created_at), "EEE · dd MMM", { locale: ptBR })}
                           </span>
                         </div>
@@ -2148,10 +2708,11 @@ export default function Chat() {
                         onCreateTask={() => {
                           setTaskTitle("");
                           setTaskDescription(m.content || "");
-                          setTaskAssigneeId("");
+                          setTaskAssigneeIds([]);
                           setTaskDueDate("");
                           setTaskPriority("medium");
                           setTaskProjectId("");
+                          setTaskChecklistItems([]);
                           setTaskDialogOpen(true);
                         }}
                         onAskCami={aiEnabled ? () => {
@@ -2190,38 +2751,86 @@ export default function Chat() {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Indicador "digitando..." */}
-            {typers.length > 0 && (
-              <div className="px-6 pb-1 text-2xs text-muted-foreground italic flex items-center gap-1.5 animate-pulse">
-                <span className="flex gap-0.5">
-                  <span className="w-1 h-1 rounded-full bg-muted-foreground" />
-                  <span className="w-1 h-1 rounded-full bg-muted-foreground" />
-                  <span className="w-1 h-1 rounded-full bg-muted-foreground" />
-                </span>
-                {(() => {
-                  const verb = (a: string) => {
-                    if (a === "uploading_image") return "está enviando uma foto";
-                    if (a === "uploading_video") return "está enviando um vídeo";
-                    if (a === "uploading_audio") return "está enviando um áudio";
-                    if (a === "uploading_file") return "está enviando um arquivo";
-                    if (a === "recording_audio") return "está gravando um áudio";
-                    return "está digitando";
-                  };
-                  if (typers.length === 1) return `${typers[0].name} ${verb(typers[0].action)}...`;
-                  // múltiplos: agrupar por ação se todos iguais; senão fallback genérico
-                  const allSame = typers.every((t) => t.action === typers[0].action);
-                  if (allSame) {
-                    const names = typers.slice(0, 2).map((t) => t.name).join(", ");
-                    return `${names} ${verb(typers[0].action).replace("está", "estão")}...`;
-                  }
-                  return `${typers.slice(0, 2).map((t) => t.name).join(", ")} estão ativos...`;
-                })()}
-              </div>
+            {/* Voltar ao fim. Com mensagens novas vira pílula contada; sem elas,
+                é só um botão redondo — o atalho vale mesmo sem novidade.
+                Vive DENTRO do wrapper da lista, não num irmão de altura zero
+                como antes: ali o `absolute bottom-2` ancorava num elemento sem
+                altura, e o botão caía atrás do composer. */}
+            {(unreadBelow > 0 || showJumpToEnd) && (
+              <button
+                type="button"
+                onClick={() => scrollToBottom("smooth")}
+                className={cn(
+                  "absolute left-1/2 -translate-x-1/2 bottom-3 z-20 flex items-center gap-1.5",
+                  "rounded-full shadow-lg transition-all hover:scale-105 active:scale-95",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  unreadBelow > 0
+                    ? "bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+                    : "h-10 w-10 justify-center bg-card text-foreground border border-border"
+                )}
+                aria-label={
+                  unreadBelow > 0
+                    ? `Ir para ${unreadBelow} ${unreadBelow === 1 ? "mensagem nova" : "mensagens novas"}`
+                    : "Ir para a mensagem mais recente"
+                }
+              >
+                <ChevronDown className="h-4 w-4" />
+                {unreadBelow > 0 && (
+                  <>{unreadBelow} {unreadBelow === 1 ? "mensagem nova" : "mensagens novas"}</>
+                )}
+              </button>
             )}
+            </div>
+
+            {/* Indicador "digitando..." */}
+            {typers.length > 0 && (() => {
+              // Balão com pontinhos, como no WhatsApp. Quem grava ou envia
+              // áudio ganha um microfone pulsando no lugar dos pontos — a ação
+              // é diferente e merece sinal diferente.
+              const isAudio = typers.some(
+                (t) => t.action === "recording_audio" || t.action === "uploading_audio",
+              );
+              const verb = (a: string) => {
+                if (a === "uploading_image") return "está enviando uma foto";
+                if (a === "uploading_video") return "está enviando um vídeo";
+                if (a === "uploading_audio") return "está enviando um áudio";
+                if (a === "uploading_file") return "está enviando um arquivo";
+                if (a === "recording_audio") return "está gravando um áudio";
+                return "está digitando";
+              };
+              const label = (() => {
+                if (typers.length === 1) return `${typers[0].name} ${verb(typers[0].action)}`;
+                const allSame = typers.every((t) => t.action === typers[0].action);
+                if (allSame) {
+                  const names = typers.slice(0, 2).map((t) => t.name).join(", ");
+                  return `${names} ${verb(typers[0].action).replace("está", "estão")}`;
+                }
+                return `${typers.slice(0, 2).map((t) => t.name).join(", ")} estão ativos`;
+              })();
+              return (
+                <div className="bg-chat-canvas flex items-center gap-2 px-3 md:px-6 pt-1 pb-2">
+                  <span
+                    className="chat-bubble-in relative inline-flex items-center gap-1 rounded-xl rounded-tl-none bg-chat-bubble-in px-3 py-2 shadow-sm"
+                    aria-hidden
+                  >
+                    {isAudio ? (
+                      <Mic className="chat-mic-pulse h-4 w-4 text-primary" />
+                    ) : (
+                      <>
+                        <span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-chat-meta" />
+                        <span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-chat-meta" />
+                        <span className="chat-typing-dot h-1.5 w-1.5 rounded-full bg-chat-meta" />
+                      </>
+                    )}
+                  </span>
+                  <span className="text-2xs text-chat-meta" aria-live="polite">{label}</span>
+                </div>
+              );
+            })()}
 
             <div
               className={cn(
-                "px-3 md:px-4 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-4 pt-2 bg-card border-t border-border relative",
+                "px-3 md:px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:pb-4 pt-2 bg-chat-composer relative",
                 dragging && "outline outline-2 outline-primary/50 outline-offset-[-8px] bg-primary/5"
               )}
               onDragEnter={(e) => { e.preventDefault(); setDragging(true); }}
@@ -2369,7 +2978,15 @@ export default function Chat() {
                 </div>
               )}
 
-              <div className="rounded-2xl border border-border bg-background shadow-sm focus-within:border-primary/40 transition-colors relative">
+              {/* Campo de digitação sem borda: no tema escuro `--card` (12% de
+                  luminância) e a barra do composer (11%) são praticamente a
+                  mesma cor, então a única coisa que desenhava a pílula era o
+                  contorno — um fio claro que saltava na tela. O token
+                  `--chat-input` resolve pelo lado certo: a pílula é um degrau de
+                  luminância acima da barra (18% no escuro, branco puro sobre o
+                  bege no claro) e se define sozinha. O foco aparece como halo
+                  da cor primária, não como linha. */}
+              <div className="rounded-3xl bg-chat-input shadow-sm transition-all relative ring-1 ring-inset ring-border/25 focus-within:ring-primary/40 focus-within:shadow-md">
                 {/* Slash commands popover */}
                 {slashOpen && slashFiltered.length > 0 && (
                   <div className="absolute bottom-full left-0 mb-1 w-72 rounded-md border border-border bg-popover shadow-lg p-1 z-20">
@@ -2446,7 +3063,7 @@ export default function Chat() {
                     </div>
                   );
                 })()}
-                <div className="flex items-start gap-2 px-3 pt-2.5">
+                <div className="flex items-end gap-0.5 px-1.5 py-1.5">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -2454,6 +3071,79 @@ export default function Chat() {
                     className="hidden"
                     onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = ""; }}
                   />
+
+                  {/* Clipe — as ações de criação vivem atrás dele (ver
+                      ComposerAttachMenu). Antes eram 7 botões numa barra fixa
+                      abaixo do campo, roubando uma linha de altura de toda
+                      conversa e espremendo 9 alvos de toque no celular. */}
+                  <ComposerAttachMenu
+                    open={attachMenuOpen}
+                    onOpenChange={setAttachMenuOpen}
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 w-9 p-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex-shrink-0"
+                        title="Anexar e criar"
+                      >
+                        <Paperclip className="w-[18px] h-[18px]" />
+                      </Button>
+                    }
+                    onFile={() => fileInputRef.current?.click()}
+                    onImage={() => fileInputRef.current?.click()}
+                    onPoll={!channel?.is_dm ? () => setPollDialogOpen(true) : undefined}
+                    onTask={() => {
+                      if (isMember) {
+                        // Member só atribui a si mesmo
+                        if (myEmployee) setTaskAssigneeIds([myEmployee.id]);
+                      } else if (channel?.is_dm && (channel as any).other_user_id) {
+                        // Pré-seleciona o destinatário em DM
+                        const otherEmp = (employees || []).find((e) => e.user_id === (channel as any).other_user_id);
+                        if (otherEmp) setTaskAssigneeIds([otherEmp.id]);
+                      }
+                      setTaskDialogOpen(true);
+                    }}
+                    onMeeting={() => {
+                      setMeetingTitle(channel?.is_dm
+                        ? `Reunião com ${(channel as any).display_name || ""}`.trim()
+                        : `Reunião — ${channel?.name || ""}`.trim());
+                      setMeetingMode("now");
+                      const now = new Date();
+                      const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+                      setMeetingDate(tomorrow.toISOString().slice(0, 10));
+                      setMeetingTime("10:00");
+                      setMeetingDialogOpen(true);
+                    }}
+                    onClara={aiEnabled ? () => { setCamiContext(null); setCamiOpen(true); } : undefined}
+                  />
+
+                  <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 w-9 p-0 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex-shrink-0"
+                        title="Emoji"
+                      >
+                        <Smile className="w-[18px] h-[18px]" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" side="top" sideOffset={8} className="p-0 w-auto border border-border rounded-xl overflow-hidden shadow-xl">
+                      <RSuspense fallback={<div className="p-6 text-xs w-[min(352px,90vw)] h-[380px] flex items-center justify-center text-muted-foreground">Carregando emojis...</div>}>
+                        <EmojiPicker
+                          data={emojiMartData}
+                          theme={document.documentElement.classList.contains("dark") ? "dark" : "light"}
+                          locale="pt"
+                          previewPosition="none"
+                          navPosition="top"
+                          perLine={9}
+                          emojiButtonSize={36}
+                          emojiSize={22}
+                          onEmojiSelect={(e: any) => insertEmoji(e.native)}
+                        />
+                      </RSuspense>
+                    </PopoverContent>
+                  </Popover>
                   <Textarea
                     ref={composerRef as any}
                     value={draft}
@@ -2480,14 +3170,18 @@ export default function Chat() {
                       ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
                     }}
                     placeholder={
+                      // Curto de propósito: o campo agora divide a linha com
+                      // quatro botões, e o cabeçalho já diz com quem se fala —
+                      // repetir o nome aqui era redundante e estourava a
+                      // largura no celular.
                       pendingAttachments.length > 0
-                        ? `Adicione uma legenda${pendingAttachments.length > 1 ? " para os anexos" : ""}... (opcional)`
+                        ? "Escreva uma legenda (opcional)"
                         : channel?.is_dm
-                          ? `Mensagem para ${(channel as any).display_name || "este contato"}`
-                          : `Mensagem em # ${channel?.name || "canal"} — use @ para mencionar`
+                          ? "Digite uma mensagem"
+                          : "Digite uma mensagem · @ menciona alguém"
                     }
                     rows={1}
-                    className="flex-1 border-0 resize-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-[36px] max-h-[160px] py-1.5 px-0 overflow-y-auto"
+                    className="flex-1 border-0 resize-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-sm min-h-[36px] max-h-[160px] py-1.5 px-0 overflow-y-auto placeholder:text-muted-foreground/70"
                     onKeyDown={(e) => {
                       if (mentionOpen) {
                         const filtered = (employees || [])
@@ -2504,133 +3198,48 @@ export default function Chat() {
                           return;
                         }
                       }
-                      if (e.key === "Enter" && !e.shiftKey && !mentionOpen) {
+                      // Enter envia SÓ no desktop. No celular o teclado virtual
+                      // não tem Shift+Enter à mão, então a única forma de quebrar
+                      // linha era não conseguir: quem escrevia um texto com mais
+                      // de um parágrafo mandava tudo picado, uma mensagem por
+                      // linha. No mobile o Enter faz o que o teclado promete —
+                      // pula linha — e o envio fica exclusivamente no botão.
+                      if (e.key === "Enter" && !e.shiftKey && !mentionOpen && !isMobile) {
                         e.preventDefault();
                         handleSend();
                       }
                     }}
+                    // Faz o teclado virtual rotular a tecla como "nova linha"
+                    // no celular (e como "enviar" no desktop, onde ela envia
+                    // mesmo). Sem isso o iOS/Android mostram "enviar" e a
+                    // pessoa toca esperando mandar a mensagem.
+                    enterKeyHint={isMobile ? "enter" : "send"}
                   />
-                </div>
-                <div className="flex items-center justify-between px-2 pb-2 pt-1">
-                  <div className="flex items-center gap-1">
+
+                  {/* Um alvo só, dois papéis: mic quando não há nada para
+                      enviar, enviar assim que houver. */}
+                  {hasComposerContent ? (
                     <Button
-                      variant="ghost"
                       size="sm"
-                      className="h-7 w-7 p-0 rounded-full text-muted-foreground"
-                      title="Anexar arquivo"
-                      onClick={() => fileInputRef.current?.click()}
+                      className="h-9 w-9 p-0 rounded-full flex-shrink-0 shadow-md shadow-primary/25 hover:shadow-lg hover:shadow-primary/30 hover:scale-105 active:scale-95 transition-all"
+                      disabled={send.isPending}
+                      onClick={handleSend}
+                      title={editingMsgId ? (isMobile ? "Salvar" : "Salvar (Enter)") : (isMobile ? "Enviar" : "Enviar (Enter)")}
                     >
-                      <Paperclip className="w-3.5 h-3.5" />
+                      {editingMsgId ? <Check className="w-[18px] h-[18px]" /> : <Send className="w-[18px] h-[18px]" />}
                     </Button>
+                  ) : (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-7 w-7 p-0 rounded-full text-muted-foreground"
-                      title="Imagem"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <ImageIcon className="w-3.5 h-3.5" />
-                    </Button>
-                    {/* Enquete só em grupos (não system, não DM) ou em qualquer canal não-DM */}
-                    {!channel?.is_dm && (
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-full text-muted-foreground" title="Criar enquete" onClick={() => setPollDialogOpen(true)}>
-                        <BarChart3 className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 rounded-full text-muted-foreground"
-                      title="Criar tarefa"
-                      onClick={() => {
-                        if (isMember) {
-                          // Member só atribui a si mesmo
-                          if (myEmployee) setTaskAssigneeId(myEmployee.id);
-                        } else if (channel?.is_dm && (channel as any).other_user_id) {
-                          // Pré-seleciona o destinatário em DM
-                          const otherEmp = (employees || []).find((e) => e.user_id === (channel as any).other_user_id);
-                          if (otherEmp) setTaskAssigneeId(otherEmp.id);
-                        }
-                        setTaskDialogOpen(true);
-                      }}
-                    >
-                      <CheckSquare className="w-3.5 h-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 rounded-full text-muted-foreground"
-                      title="Criar reunião"
-                      onClick={() => {
-                        setMeetingTitle(channel?.is_dm
-                          ? `Reunião com ${(channel as any).display_name || ""}`.trim()
-                          : `Reunião — ${channel?.name || ""}`.trim());
-                        setMeetingMode("now");
-                        const now = new Date();
-                        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-                        setMeetingDate(tomorrow.toISOString().slice(0, 10));
-                        setMeetingTime("10:00");
-                        setMeetingDialogOpen(true);
-                      }}
-                    >
-                      <Video className="w-3.5 h-3.5" />
-                    </Button>
-                    {aiEnabled && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1.5 px-2 rounded-full text-primary hover:bg-primary/10"
-                      title="Pergunte a Clara"
-                      onClick={() => { setCamiContext(null); setCamiOpen(true); }}
-                    >
-                      <CamiAvatar className="w-4 h-4" />
-                      <span className="hidden sm:inline text-2xs font-medium">Pergunte a Clara</span>
-                    </Button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
-                      <PopoverTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-full text-muted-foreground" title="Emoji">
-                          <Smile className="w-3.5 h-3.5" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent align="end" sideOffset={8} className="p-0 w-auto border border-border rounded-xl overflow-hidden shadow-xl">
-                        <RSuspense fallback={<div className="p-6 text-xs w-[min(352px,90vw)] h-[400px] flex items-center justify-center text-muted-foreground">Carregando emojis...</div>}>
-                          <EmojiPicker
-                            data={emojiMartData}
-                            theme="auto"
-                            locale="pt"
-                            previewPosition="none"
-                            navPosition="top"
-                            perLine={9}
-                            emojiButtonSize={36}
-                            emojiSize={22}
-                            onEmojiSelect={(e: any) => insertEmoji(e.native)}
-                          />
-                        </RSuspense>
-                      </PopoverContent>
-                    </Popover>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 rounded-full text-muted-foreground"
+                      className="h-9 w-9 p-0 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                       title="Gravar áudio"
                       onClick={startRecording}
                       disabled={recording}
                     >
-                      <Mic className="w-3.5 h-3.5" />
+                      <Mic className="w-[18px] h-[18px]" />
                     </Button>
-                    <Button
-                      size="sm"
-                      className="h-8 w-8 p-0 rounded-full"
-                      disabled={(!draft.trim() && pendingAttachments.length === 0 && !editingMsgId) || send.isPending}
-                      onClick={handleSend}
-                      title={editingMsgId ? "Salvar (Enter)" : "Enviar (Enter)"}
-                    >
-                      {editingMsgId ? <Check className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
-                    </Button>
-                  </div>
+                  )}
                 </div>
               </div>
               {dragging && (
@@ -2688,7 +3297,7 @@ export default function Chat() {
                                 setSelectedChannelId(null);
                                 setInfoPanelOpen(false);
                               },
-                              onError: (e: any) => toast.error(e.message || "Erro ao apagar"),
+                              onError: (e: Error) => toast.error(e.message || "Erro ao apagar"),
                             });
                           }
                         }}
@@ -2702,28 +3311,6 @@ export default function Chat() {
                     <MoreHorizontal className="w-3.5 h-3.5" />
                   </Button>
                 )}
-                {/* Input file invisível para upload de avatar */}
-                <input
-                  id="channel-avatar-input"
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={async (ev) => {
-                    const f = ev.target.files?.[0];
-                    if (!f || !channel) return;
-                    setUploadingAvatar(true);
-                    try {
-                      const url = await uploadChannelAvatar(channel.id, f);
-                      await updateChannel.mutateAsync({ id: channel.id, avatar_url: url });
-                      toast.success("Foto atualizada");
-                    } catch (e: any) {
-                      toast.error(e.message || "Erro ao enviar foto");
-                    } finally {
-                      setUploadingAvatar(false);
-                      ev.target.value = "";
-                    }
-                  }}
-                />
               </div>
 
               <div className="flex-1 overflow-y-auto">
@@ -2745,7 +3332,7 @@ export default function Chat() {
                     !channel.is_dm && "capitalize"
                   )}>
                     {channel.is_dm
-                      ? ((channel as any).display_name || "Conversa")
+                      ? (channel.display_name || "Conversa")
                       : channel.name}
                   </h2>
                   {channel.is_dm
@@ -2804,12 +3391,7 @@ export default function Chat() {
                         <div className="text-2xs font-medium text-muted-foreground uppercase tracking-wide px-2 py-1.5">
                           Silenciar por
                         </div>
-                        {[
-                          { label: "1 hora", h: 1 },
-                          { label: "8 horas", h: 8 },
-                          { label: "24 horas", h: 24 },
-                          { label: "Para sempre", h: null as number | null },
-                        ].map((opt) => (
+                        {MUTE_OPTIONS.map((opt) => (
                           <button
                             key={opt.label}
                             onClick={() => {
@@ -2993,7 +3575,7 @@ export default function Chat() {
                                   if (confirm(`Remover ${m.full_name} do canal?`)) {
                                     removeMember.mutate(
                                       { channel_id: channel.id, user_id: m.user_id },
-                                      { onError: (e: any) => toast.error(e.message || "Erro") }
+                                      { onError: (e: Error) => toast.error(e.message || "Erro") }
                                     );
                                   }
                                 }}
@@ -3050,6 +3632,79 @@ export default function Chat() {
         </>
         )}
       </main>
+
+      {/* Detalhes/membros da conversa no MOBILE. Convive com o painel `aside`
+          do desktop (infoPanelOpen) em vez de substituí-lo: aquele tem itens
+          que não fazem sentido aqui (projetos e reuniões em comum, paginador de
+          membros), e trocar um pelo outro seria regressão no desktop. */}
+      {channel && isMobile && (
+        <ChannelInfoDrawer
+          open={infoDrawerOpen}
+          onOpenChange={setInfoDrawerOpen}
+          title={channel.is_dm ? (channel.display_name || "Conversa") : channel.name}
+          avatarUrl={channel.is_dm ? channel.display_avatar : channel.avatar_url}
+          subtitle={
+            channel.is_dm
+              ? (() => {
+                  const p = channel.other_user_id
+                    ? presence?.get(channel.other_user_id)
+                    : undefined;
+                  return p?.online ? "online · agora" : `visto por último ${formatLastSeen(p?.lastSeenAt)}`;
+                })()
+              : `${members.length} membro${members.length !== 1 ? "s" : ""}`
+          }
+          description={channel.is_dm ? null : channel.description}
+          isDm={!!channel.is_dm}
+          isSystem={!!channel.is_system}
+          members={members}
+          presence={presence}
+          searchValue={searchInChannel}
+          onSearchChange={setSearchInChannel}
+          onSearchSubmit={() => { setSearchOpen(true); setInfoDrawerOpen(false); }}
+          isAdmin={isAdmin}
+          isManager={isManager}
+          isMuted={isCurrentMuted}
+          muteOptions={MUTE_OPTIONS}
+          onToggleMute={(mute, durationHours) => {
+            if (!selectedChannelId) return;
+            toggleMute.mutate({ channelId: selectedChannelId, mute, durationHours });
+          }}
+          onAddMember={() => { setInfoDrawerOpen(false); setAddMemberOpen(true); }}
+          onRemoveMember={(mb) => {
+            if (confirm(`Remover ${mb.full_name} do canal?`)) {
+              removeMember.mutate(
+                { channel_id: channel.id, user_id: mb.user_id },
+                { onError: (e: Error) => toast.error(e.message || "Erro") },
+              );
+            }
+          }}
+          onEditGroup={() => {
+            setEditName(channel.name);
+            setEditDesc(channel.description || "");
+            setInfoDrawerOpen(false);
+            setEditOpen(true);
+          }}
+          onChangePhoto={() => {
+            const input = document.getElementById("channel-avatar-input") as HTMLInputElement | null;
+            input?.click();
+          }}
+          onDeleteGroup={() => {
+            if (confirm(`Apagar o grupo "${channel.name}"? Esta ação não pode ser desfeita.`)) {
+              deleteChannel.mutate(channel.id, {
+                onSuccess: () => {
+                  toast.success("Grupo apagado");
+                  setInfoDrawerOpen(false);
+                  setSelectedChannelId(null);
+                },
+                onError: (e: Error) => toast.error(e.message || "Erro ao apagar"),
+              });
+            }
+          }}
+          attachments={recentAttachments}
+          linksCount={messages.filter((msg) => /https?:\/\//.test(msg.content)).length}
+          starredCount={messages.filter((msg) => starredSet?.has(msg.id)).length}
+        />
+      )}
 
       {/* Dialog: nova mensagem direta */}
       <Dialog open={dmOpen} onOpenChange={setDmOpen}>
@@ -3442,10 +4097,11 @@ export default function Chat() {
           if (!open) {
             setTaskTitle("");
             setTaskDescription("");
-            setTaskAssigneeId("");
+            setTaskAssigneeIds([]);
             setTaskDueDate("");
             setTaskPriority("medium");
             setTaskProjectId("");
+            setTaskChecklistItems([]);
           }
         }}
       >
@@ -3457,6 +4113,26 @@ export default function Chat() {
             </DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 py-2">
+            {/* Ditar tarefa: a IA preenche os campos abaixo para revisão. */}
+            <VoiceTaskRecorder
+              onDraft={(draft) => {
+                setTaskTitle(draft.title || taskTitle);
+                setTaskDescription(draft.description || taskDescription);
+                setTaskPriority(draft.priority);
+                if (draft.due_date) setTaskDueDate(draft.due_date);
+                if (draft.project_id) setTaskProjectId(draft.project_id);
+                // Member segue sem poder atribuir a outros.
+                if (!isMember && draft.assignee_ids.length > 0) setTaskAssigneeIds(draft.assignee_ids);
+                setTaskChecklistItems(draft.checklist_items || []);
+                if (draft.unmatched_assignees.length > 0) {
+                  toast.warning(
+                    `Não encontrei ${draft.unmatched_assignees.join(", ")} entre os colaboradores — escolha o responsável manualmente.`
+                  );
+                } else {
+                  toast.success("Tarefa montada a partir do seu áudio. Revise antes de criar.");
+                }
+              }}
+            />
             <div>
               <label className="text-2xs font-medium text-muted-foreground uppercase tracking-wide">Título *</label>
               <Input
@@ -3479,44 +4155,35 @@ export default function Chat() {
             </div>
             <div>
               <label className="text-2xs font-medium text-muted-foreground uppercase tracking-wide">Projeto</label>
-              <select
-                value={taskProjectId}
-                onChange={(e) => setTaskProjectId(e.target.value)}
-                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-2 text-sm"
+              <Select
+                value={taskProjectId || "__none__"}
+                onValueChange={(v) => setTaskProjectId(v === "__none__" ? "" : v)}
               >
-                <option value="">— Sem projeto —</option>
-                {(projects || []).map((p: any) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+                <SelectTrigger className="mt-1 h-9 text-sm" aria-label="Projeto">
+                  <SelectValue placeholder="— Sem projeto —" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— Sem projeto —</SelectItem>
+                  {(projects || []).map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
-                <label className="text-2xs font-medium text-muted-foreground uppercase tracking-wide">Responsável</label>
-                <select
-                  value={taskAssigneeId}
-                  onChange={(e) => setTaskAssigneeId(e.target.value)}
-                  disabled={isMember}
-                  className="mt-1 w-full h-9 rounded-md border border-input bg-background px-2 text-sm disabled:opacity-70 disabled:cursor-not-allowed"
-                >
-                  {isMember ? (
-                    // Member só pode atribuir a si mesmo
-                    myEmployee && (
-                      <option value={myEmployee.id}>{myEmployee.full_name}</option>
-                    )
-                  ) : (
-                    <>
-                      <option value="">— Sem responsável —</option>
-                      {(employees || [])
-                        .filter((emp) => emp.status === "active")
-                        .map((emp) => (
-                          <option key={emp.id} value={emp.id}>
-                            {emp.full_name}
-                          </option>
-                        ))}
-                    </>
-                  )}
-                </select>
+                <label className="text-2xs font-medium text-muted-foreground uppercase tracking-wide">Responsáveis</label>
+                <div className="mt-1">
+                  <AssigneeMultiSelect
+                    value={taskAssigneeIds}
+                    onChange={setTaskAssigneeIds}
+                    employees={employees || []}
+                    isMember={isMember}
+                    memberName={myEmployee?.full_name}
+                    placeholder="— Sem responsável —"
+                    triggerClassName="h-9 text-sm"
+                  />
+                </div>
               </div>
               <div>
                 <label className="text-2xs font-medium text-muted-foreground uppercase tracking-wide">Vence em</label>
@@ -3556,17 +4223,21 @@ export default function Chat() {
               onClick={() => {
                 if (!profile?.tenant_id || !profile.user_id || !selectedChannelId) return;
                 // Member só pode atribuir a si mesmo
-                const enforcedAssigneeId = isMember ? (myEmployee?.id ?? null) : (taskAssigneeId || null);
+                const enforcedAssigneeIds = isMember
+                  ? (myEmployee?.id ? [myEmployee.id] : [])
+                  : taskAssigneeIds;
+                const enforcedAssigneeId = enforcedAssigneeIds[0] ?? null;
                 createTaskFromChat.mutate(
                   {
                     title: taskTitle.trim(),
                     description: taskDescription.trim() || null,
-                    assignee_id: enforcedAssigneeId,
+                    assignee_ids: enforcedAssigneeIds,
                     due_date: taskDueDate || null,
                     priority: taskPriority,
                     status: "todo",
                     created_by: profile.user_id,
                     project_id: taskProjectId || null,
+                    checklist_items: taskChecklistItems.length > 0 ? taskChecklistItems : null,
                   } as any,
                   {
                     onSuccess: async (created: any) => {
@@ -3591,9 +4262,12 @@ export default function Chat() {
                         { content: `📋 ${taskTitle.trim()}`, attachments: [taskAtt] } as any,
                         {
                           onSuccess: async () => {
-                            // Notifica o responsável (se diferente do criador)
-                            const assigneeEmp = (employees || []).find((e) => e.id === enforcedAssigneeId);
-                            if (assigneeEmp?.user_id && assigneeEmp.user_id !== profile.user_id && selectedChannelId) {
+                            // Notifica TODOS os responsáveis (exceto o próprio criador)
+                            const assigneeEmps = (employees || []).filter(
+                              (e) => enforcedAssigneeIds.includes(e.id) && e.user_id && e.user_id !== profile.user_id
+                            );
+                            for (const assigneeEmp of assigneeEmps) {
+                              if (!selectedChannelId) break;
                               try {
                                 // RPC SECURITY DEFINER: insere a notificação só se o responsável
                                 // NÃO silenciou o canal (checagem do mute do destinatário server-side)
@@ -3609,10 +4283,11 @@ export default function Chat() {
                             setTaskDialogOpen(false);
                             setTaskTitle("");
                             setTaskDescription("");
-                            setTaskAssigneeId("");
+                            setTaskAssigneeIds([]);
                             setTaskDueDate("");
                             setTaskPriority("medium");
                             setTaskProjectId("");
+                            setTaskChecklistItems([]);
                           },
                           onError: (e: any) => toast.error(e.message || "Erro ao enviar tarefa"),
                         }
@@ -3844,7 +4519,7 @@ export default function Chat() {
                 {readList.length > 0 && (
                   <div>
                     <div className="text-2xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
-                      <CheckCheck className="w-3 h-3 text-primary" />
+                      <CheckCheck className="w-3.5 h-3.5 text-chat-check-read" strokeWidth={2.75} />
                       Lida por · {readList.length}
                     </div>
                     <div className="flex flex-col gap-1">
@@ -4401,6 +5076,55 @@ function MessageRowImpl({
   deliveredToAny?: boolean;
   isLastMine?: boolean;
 }) {
+  // Ações por toque. A barra de ações do balão é `opacity-0 group-hover:...`,
+  // e hover não existe no celular: reagir, responder, copiar, editar, encaminhar
+  // e excluir eram simplesmente inalcançáveis no mobile. Long-press abre o mesmo
+  // conjunto de ações num action sheet.
+  //
+  // `actionsOpen` é estado LOCAL de propósito: `MessageRow` é memo() com
+  // comparador manual (logo abaixo), e prop nova que não entre no comparador
+  // vira bug silencioso de re-render. setState local re-renderiza esta linha
+  // sem passar pela comparação de props.
+  const isMobile = useIsMobile();
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const longPress = useLongPress(() => setActionsOpen(true), {
+    // Em edição o balão vira textarea; o hold atrapalharia a seleção de texto.
+    disabled: !isMobile || !!editing,
+  });
+
+  // Swipe-to-reply: mesmo `onReply` do action sheet, num gesto só. O sentido
+  // acompanha o espaço livre — mensagem própria está encostada à direita, então
+  // ela sai para a ESQUERDA; a de terceiros, o contrário.
+  const swipe = useSwipeToReply(() => onReply?.(), {
+    direction: isMine ? "left" : "right",
+    disabled: !isMobile || !!editing || !onReply,
+  });
+
+  // Os dois gestos vivem no MESMO balão e disputam os mesmos onTouch*.
+  // Espalhar `{...longPress} {...swipe.handlers}` faria o segundo apagar o
+  // primeiro — então compomos chamando os dois em sequência. O long-press
+  // continua se auto-cancelando aos 10px de movimento, que é o correto: assim
+  // que vira arrasto, deixa de ser "segurar".
+  const touchHandlers = {
+    onTouchStart: (e: React.TouchEvent<HTMLElement>) => {
+      longPress.onTouchStart(e);
+      swipe.handlers.onTouchStart(e);
+    },
+    onTouchMove: (e: React.TouchEvent<HTMLElement>) => {
+      longPress.onTouchMove(e);
+      swipe.handlers.onTouchMove(e);
+    },
+    onTouchEnd: (e: React.TouchEvent<HTMLElement>) => {
+      longPress.onTouchEnd(e);
+      swipe.handlers.onTouchEnd(e);
+    },
+    onTouchCancel: (e: React.TouchEvent<HTMLElement>) => {
+      longPress.onTouchCancel(e);
+      swipe.handlers.onTouchCancel(e);
+    },
+    onContextMenu: longPress.onContextMenu,
+  };
+
   // Calcula status de leitura: outros membros que leram (excluindo o autor)
   const readBy: MemberRead[] = (memberReads || []).filter((mr: any) => {
     if (mr.user_id === m.author_id) return false;
@@ -4451,6 +5175,24 @@ function MessageRowImpl({
         isMine ? "flex-row-reverse" : ""
       )}
     >
+      {/* Pista visual do swipe-to-reply. Fica FORA do balão de propósito: o
+          balão tem `transform` durante o gesto e levaria o ícone junto, em vez
+          de revelá-lo. O wrapper externo já é `relative`. */}
+      {swipe.active && (
+        <span
+          className={cn(
+            "absolute top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center",
+            "h-7 w-7 rounded-full transition-colors",
+            swipe.willTrigger ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+            isMine ? "right-2" : "left-2"
+          )}
+          style={{ opacity: Math.min(1, Math.abs(swipe.offset) / 60) }}
+          aria-hidden
+        >
+          <MessageSquare className="w-3.5 h-3.5" />
+        </span>
+      )}
+
       {/* Avatar — só na primeira msg do bloco; espaço reservado nas demais */}
       {sameBlock ? (
         <div className="w-8 flex-shrink-0" />
@@ -4458,22 +5200,42 @@ function MessageRowImpl({
         <AvatarBadge name={m.author_name || "?"} avatarUrl={m.author_avatar} size="sm" />
       )}
       <div className={cn("flex flex-col gap-0.5 min-w-0 max-w-[85%] sm:max-w-[70%]", isMine && "items-end")}>
-        {!isMine && !sameBlock && (
-          <span className="text-xs font-semibold text-foreground px-1">
-            {m.author_name || "Usuário"}
-          </span>
-        )}
-
         {/* Balão */}
         <div
+          {...touchHandlers}
+          style={{
+            transform: swipe.offset ? `translateX(${swipe.offset}px)` : undefined,
+            // Sem transição durante o arrasto (o dedo é a animação); com
+            // transição na volta, para o balão retornar suave ao soltar.
+            transition: swipe.active ? "none" : "transform 180ms ease-out",
+            // CRÍTICO: entrega o eixo horizontal ao JS e mantém a rolagem
+            // vertical com o navegador. Sem isto o Chrome cancela o gesto no
+            // primeiro scroll.
+            touchAction: "pan-y",
+          }}
           className={cn(
-            "rounded-2xl px-3.5 py-2 shadow-sm relative",
+            // `select-none` só no mobile: impede o Android de iniciar seleção de
+            // texto durante o hold. No desktop a seleção continua normal.
+            // Balão no padrão WhatsApp: fundo SÓLIDO (translúcido sujaria o
+            // texto sobre a textura do canvas), canto reto do lado de quem
+            // falou e cauda desenhada em ::after — ver .chat-bubble-* no
+            // index.css. Sem borda: a sombra já dá o relevo.
+            "rounded-xl px-3 py-1.5 shadow-sm relative select-none md:select-auto",
             isMine
-              ? "bg-primary/10 border border-primary/15 rounded-tr-sm"
-              : "bg-card border border-border rounded-tl-sm",
-            sameBlock && (isMine ? "rounded-tr-2xl" : "rounded-tl-2xl")
+              ? "chat-bubble-out bg-chat-bubble-out text-chat-bubble-out-foreground rounded-tr-none"
+              : "chat-bubble-in bg-chat-bubble-in text-chat-bubble-in-foreground rounded-tl-none",
+            // Mensagens seguintes do mesmo bloco não repetem a cauda.
+            sameBlock && "chat-bubble-stacked rounded-xl"
           )}
         >
+          {/* Nome de quem falou — DENTRO do balão, como no WhatsApp em grupo.
+              Só na primeira msg do bloco e só nas recebidas. */}
+          {!isMine && !sameBlock && (
+            <span className="block text-xs font-semibold text-primary mb-0.5">
+              {m.author_name || "Usuário"}
+            </span>
+          )}
+
           {/* Quote do parent (responder) — clicável pra scroll */}
           {parent && (
             <button
@@ -4486,8 +5248,8 @@ function MessageRowImpl({
                 }
               }}
               className={cn(
-                "border-l-2 pl-2 mb-1.5 -mx-1 text-xs hover:bg-muted/40 rounded-r transition-colors w-full max-w-full min-w-0 overflow-hidden text-left",
-                isMine ? "border-primary/40" : "border-primary/30"
+                "border-l-[3px] pl-2 py-1 mb-1.5 text-xs bg-foreground/[0.06] hover:bg-foreground/[0.1] rounded-r rounded-l-sm transition-colors w-full max-w-full min-w-0 overflow-hidden text-left",
+                isMine ? "border-primary/50" : "border-primary/40"
               )}
             >
               <p className="text-2xs font-semibold text-primary truncate">
@@ -4508,9 +5270,12 @@ function MessageRowImpl({
                 autoFocus
                 className="w-full bg-transparent text-sm resize-none outline-none border border-border rounded p-1.5"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onEditSave?.(); }
+                  // Mesma regra do composer: no celular o Enter quebra linha e
+                  // quem salva é o botão "Salvar".
+                  if (e.key === "Enter" && !e.shiftKey && !isMobile) { e.preventDefault(); onEditSave?.(); }
                   if (e.key === "Escape") onEditCancel?.();
                 }}
+                enterKeyHint={isMobile ? "enter" : "send"}
               />
               {attachments.length > 0 && (
                 <div className="text-2xs text-muted-foreground flex items-center gap-1">
@@ -4573,18 +5338,20 @@ function MessageRowImpl({
                         onClick={() => onOpenLightbox?.(a)}
                         className="max-w-[280px] max-h-[260px] rounded-md border border-border cursor-zoom-in object-cover"
                       />
-                      {/* Botões hover: expand + download */}
-                      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover/img:opacity-100 transition-opacity">
+                      {/* Expandir + baixar. No mobile ficam SEMPRE visíveis:
+                          hover não existe no toque, então `opacity-0 group-hover`
+                          tornava baixar um anexo impossível pelo celular. */}
+                      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover/img:opacity-100 transition-opacity">
                         <button
                           onClick={(e) => { e.stopPropagation(); onOpenLightbox?.(a); }}
-                          className="w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
+                          className="w-9 h-9 md:w-7 md:h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
                           title="Expandir"
                         >
                           <Maximize2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); downloadAttachment(a.url, a.name); }}
-                          className="w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
+                          className="w-9 h-9 md:w-7 md:h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
                           title="Baixar"
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -4617,17 +5384,17 @@ function MessageRowImpl({
                         className="max-w-[320px] max-h-[280px] rounded-md border border-border"
                         preload="metadata"
                       />
-                      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover/vid:opacity-100 transition-opacity">
+                      <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover/vid:opacity-100 transition-opacity">
                         <button
                           onClick={(e) => { e.stopPropagation(); onOpenLightbox?.(a); }}
-                          className="w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
+                          className="w-9 h-9 md:w-7 md:h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
                           title="Expandir"
                         >
                           <Maximize2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); downloadAttachment(a.url, a.name); }}
-                          className="w-7 h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
+                          className="w-9 h-9 md:w-7 md:h-7 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center"
                           title="Baixar"
                         >
                           <Download className="w-3.5 h-3.5" />
@@ -4637,13 +5404,13 @@ function MessageRowImpl({
                   );
                 }
                 return (
-                  <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-muted/50 text-xs text-foreground group/file">
+                  <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-foreground/[0.06] text-xs group/file">
                     <Paperclip className="w-3 h-3 text-muted-foreground flex-shrink-0" />
                     <a href={a.url} target="_blank" rel="noreferrer" className="truncate flex-1 hover:underline">{a.name || "anexo"}</a>
                     {a.size && <span className="text-2xs text-muted-foreground">{Math.ceil(a.size / 1024)}KB</span>}
                     <button
                       onClick={() => downloadAttachment(a.url, a.name)}
-                      className="opacity-0 group-hover/file:opacity-100 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+                      className="opacity-100 md:opacity-0 md:group-hover/file:opacity-100 p-2 md:p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
                       title="Baixar"
                     >
                       <Download className="w-3 h-3" />
@@ -4744,7 +5511,7 @@ function MessageRowImpl({
           )}
 
           <div className={cn("flex items-center gap-1 mt-1", isMine ? "justify-end" : "justify-start")}>
-            <span className="text-[10px] text-muted-foreground tabular-nums leading-none">
+            <span className="text-[10px] text-chat-meta tabular-nums leading-none">
               {format(new Date(m.created_at), "HH:mm")}
             </span>
             {isMine && (() => {
@@ -4758,13 +5525,14 @@ function MessageRowImpl({
                     ? "Entregue"
                     : "Enviado";
               const icon = status === "sent" ? (
-                <Check className="w-3 h-3 text-muted-foreground/60" aria-label={label} />
+                <Check className="w-3.5 h-3.5 text-chat-meta" strokeWidth={2.75} aria-label={label} />
               ) : (
                 <CheckCheck
                   className={cn(
-                    "w-3 h-3",
-                    status === "read" && (isDm || readByAll) ? "text-primary" : "text-muted-foreground/60"
+                    "w-3.5 h-3.5",
+                    status === "read" && (isDm || readByAll) ? "text-chat-check-read" : "text-chat-meta"
                   )}
+                  strokeWidth={2.75}
                   aria-label={label}
                 />
               );
@@ -4897,6 +5665,31 @@ function MessageRowImpl({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* Action sheet mobile — mesmas ações da barra de hover, via long-press.
+          Renderizado só no mobile para não montar um Drawer por mensagem no
+          desktop, onde a barra de hover já resolve. */}
+      {isMobile && (
+        <MessageActionsSheet
+          open={actionsOpen}
+          onOpenChange={setActionsOpen}
+          content={m.content}
+          isMine={isMine}
+          editing={editing}
+          onReact={onReact}
+          onReply={onReply}
+          onEditStart={onEditStart}
+          onForward={onForward}
+          onAskCami={onAskCami}
+          onCreateTask={onCreateTask}
+          onStar={onStar}
+          isStarred={isStarred}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          isPinned={isPinned}
+          onDelete={onDelete}
+        />
+      )}
     </div>
   );
 }

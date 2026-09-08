@@ -7,10 +7,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalVideoTrack } from "livekit-client";
-import {
-  type BackgroundProcessorWrapper,
-  supportsBackgroundProcessors,
-} from "@livekit/track-processors";
+// Import SOMENTE de tipo: apagado na compilação, não puxa o MediaPipe (~4 MB)
+// para o chunk da sala. Ver v8.36.0 em applyBackgroundToTrack.ts.
+import type { BackgroundProcessorWrapper } from "@livekit/track-processors";
 import { Image as ImageIcon, Upload, Loader2, Check, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,10 @@ import { useMeetPreferences, type BackgroundType, type BackgroundQuality } from 
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { BACKGROUND_PRESETS, presetToken, resolveBackgroundUrl } from "./backgroundPresets";
-import { applyBackgroundToTrack } from "./applyBackgroundToTrack";
+import {
+  applyBackgroundToTrack,
+  supportsBackgroundProcessors,
+} from "./applyBackgroundToTrack";
 
 interface Props {
   /** Track de câmera local (pode ser null enquanto não publicada). */
@@ -36,6 +38,12 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
   const processorRef = useRef<BackgroundProcessorWrapper | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  /**
+   * v8.36.0 — o MediaPipe (~4 MB) agora só desce quando o usuário escolhe um
+   * fundo. São alguns segundos em 4G: sem aviso, o clique parece não ter feito
+   * nada. O CLAUDE.md exige feedback visível de carregamento.
+   */
+  const [baixandoLib, setBaixandoLib] = useState(false);
 
   const supported = supportsBackgroundProcessors();
   const lowEnd =
@@ -75,6 +83,7 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
           imageUrlOrPreset,
           current: processorRef.current,
           quality: prefs.backgroundQuality,
+          onLoadStart: () => setBaixandoLib(true),
         });
         processorRef.current = processor;
         update({
@@ -84,8 +93,9 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
         });
       } catch (err) {
         console.error("[BackgroundPicker] apply failed", err);
-        toast.error("Falha ao aplicar fundo virtual.");
+        toast.error("Falha ao aplicar fundo virtual. Verifique a conexão e tente de novo.");
       } finally {
+        setBaixandoLib(false);
         setBusy(false);
       }
     },
@@ -113,12 +123,14 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
           imageUrlOrPreset: prefs.backgroundImageUrl,
           current: null, // força recriar com novo modelo
           quality: next,
+          onLoadStart: () => setBaixandoLib(true),
         });
         processorRef.current = processor;
       } catch (err) {
         console.error("[BackgroundPicker] quality change failed", err);
         toast.error("Falha ao trocar qualidade do fundo.");
       } finally {
+        setBaixandoLib(false);
         setBusy(false);
       }
     },
@@ -167,7 +179,11 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
           imageUrlOrPreset: prefs.backgroundImageUrl,
           current: null,
           quality: prefs.backgroundQuality,
+          onLoadStart: () => {
+            if (alive) setBaixandoLib(true);
+          },
         });
+        if (alive) setBaixandoLib(false);
         if (alive) processorRef.current = result.processor;
         else if (result.processor) {
           // Componente desmontou enquanto aplicávamos — destrói para não vazar
@@ -175,7 +191,10 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
         }
       } catch (err) {
         console.warn("[BackgroundPicker] reaplicação falhou", err);
-        if (alive) lastTrackRef.current = null; // permite retry numa nova render
+        if (alive) {
+          setBaixandoLib(false);
+          lastTrackRef.current = null; // permite retry numa nova render
+        }
       }
     })();
     return () => {
@@ -238,6 +257,16 @@ export function BackgroundPickerPopover({ track, trigger }: Props) {
         <div className="space-y-3">
           <div>
             <h4 className="text-sm font-semibold text-foreground">Fundo virtual</h4>
+            {baixandoLib && (
+              <p
+                className="text-xs text-primary mt-1 flex items-center gap-1.5"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                Baixando o modelo de segmentação (só na primeira vez)…
+              </p>
+            )}
             {lowEnd && (
               <p className="text-xs text-muted-foreground mt-1">
                 Pode reduzir performance no seu dispositivo.

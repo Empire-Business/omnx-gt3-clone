@@ -405,7 +405,7 @@ Retorne SEMPRE um JSON válido com esta estrutura:
     // Idempotência: já processada?
     const { data: existing } = await serviceClient
       .from("meetings")
-      .select("status, summary_markdown, tenant_id, created_by, transcript_raw")
+      .select("status, summary_markdown, tenant_id, created_by, transcript_raw, soniox_session_id")
       .eq("id", meeting_id)
       .maybeSingle();
 
@@ -414,7 +414,16 @@ Retorne SEMPRE um JSON válido com esta estrutura:
     // Se transcript não veio no body, usa o salvo no banco (reprocessamento retroativo)
     const transcript = bodyTranscript || existing.transcript_raw;
     if (!transcript) {
-      return json({ error: "no transcript available for this meeting" }, 400, corsHeaders);
+      // `soniox_session_id` é gravado pelo useLiveKitTranscription assim que a
+      // captura sobe, mesmo sem nenhuma fala. Ele separa dois casos que antes
+      // eram o mesmo NULL — e que exigem ações opostas de quem lê o erro.
+      const pipelineRan = !!existing.soniox_session_id;
+      return json({
+        error: pipelineRan
+          ? "A transcrição rodou nesta reunião, mas não captou áudio nenhum. Verifique se os microfones estavam ativos e se o navegador do responsável tinha permissão de áudio."
+          : "Esta reunião não tem transcrição: o responsável pela reunião não esteve na sala, então a captura nunca chegou a rodar. Só a gravação de vídeo existe.",
+        code: pipelineRan ? "transcript_empty" : "transcript_never_captured",
+      }, 400, corsHeaders);
     }
 
     if (!force && existing.summary_markdown && existing.summary_markdown.trim().length > 0) {

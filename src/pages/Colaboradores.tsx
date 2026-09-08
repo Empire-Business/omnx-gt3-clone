@@ -98,7 +98,11 @@ function useEmployeeTaskCounts(employeeIds: string[]) {
       const { data } = await supabase
         .from("tasks")
         .select("assignee_id, status, due_date")
-        .in("assignee_id", employeeIds);
+        .in("assignee_id", employeeIds)
+        // Mesmo criterio do Kanban e da lista do colaborador: subtarefa nao
+        // conta como tarefa propria, senao os numeros aqui ficam inflados e
+        // divergem do que a pessoa ve no quadro.
+        .is("parent_task_id", null);
 
       const result: Record<string, { doing: number; overdue: number; done: number; total: number }> = {};
       for (const t of data || []) {
@@ -949,7 +953,7 @@ function EmployeeFormDialog({
   const [selectedSubareaId, setSelectedSubareaId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("member");
   const [isCeo, setIsCeo] = useState<boolean>(false);
-  const [accessMode, setAccessMode] = useState<"invite" | "temp">("invite");
+  const [inviteSent, setInviteSent] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
@@ -977,7 +981,7 @@ function EmployeeFormDialog({
       setFullName(""); setWorkEmail(""); setPhone(""); setPositionId("");
       setSelectedAreaType(""); setSelectedSubareaId("");
       setSelectedRole("member"); setIsCeo(false); setAvatarPreview(null); setAvatarFile(null);
-      setAccessMode("invite");
+      setInviteSent(false);
       setTempPassword(null);
     }
   }, [open, existing, allPositions]);
@@ -1050,16 +1054,16 @@ function EmployeeFormDialog({
           work_email: workEmail.trim(),
           role: selectedRole as "admin" | "manager" | "member",
           is_ceo: isCeo || undefined,
-          send_invite: accessMode === "invite",
         });
-        if (result?.invite_sent) {
-          toast.success("Colaborador criado! Convite enviado por email para definir a senha.");
-        } else if (result?.temp_password) {
+        if (result?.temp_password) {
           setTempPassword(result.temp_password);
-          toast.success("Colaborador criado com senha temporária");
-        } else {
-          toast.success("Colaborador criado!");
+          setInviteSent(!!result.invite_sent);
         }
+        toast.success(
+          result?.invite_sent
+            ? "Colaborador criado! Senha temporária enviada por email."
+            : "Colaborador criado com senha temporária"
+        );
       }
       onOpenChange(false);
     } catch (err: any) {
@@ -1177,19 +1181,11 @@ function EmployeeFormDialog({
           )}
 
           {!isEditing && (
-            <div>
-              <Label>Acesso do colaborador</Label>
-              <Select value={accessMode} onValueChange={(v) => setAccessMode(v as "invite" | "temp")}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="invite">Enviar convite por email</SelectItem>
-                  <SelectItem value="temp">Gerar senha temporária</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {accessMode === "invite"
-                  ? "O colaborador recebe um email para definir a própria senha."
-                  : "Uma senha temporária é gerada para você repassar manualmente."}
+            <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Uma <strong className="text-foreground">senha temporária</strong> será gerada e exibida
+                para você repassar. O colaborador também recebe por email a senha, o endereço da
+                plataforma e o aviso de trocá-la assim que entrar.
               </p>
             </div>
           )}
@@ -1217,7 +1213,10 @@ function EmployeeFormDialog({
               Senha temporária
             </DialogTitle>
             <DialogDescription>
-              Guarde esta senha e envie ao colaborador — ele pode redefini-la depois na tela de login.
+              {inviteSent
+                ? "Já enviamos esta senha por email ao colaborador, junto com o link da plataforma. Guarde-a também para repassar caso o email não chegue."
+                : "O email não pôde ser enviado — repasse esta senha ao colaborador manualmente."}
+              {" "}Ele pode trocá-la assim que entrar.
             </DialogDescription>
           </DialogHeader>
 

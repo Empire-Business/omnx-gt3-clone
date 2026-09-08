@@ -13,6 +13,14 @@
  *
  * Troca dinâmica: quando o usuário altera o slider para cruzar 1.0,
  * recriamos o bundle de cada track com o pipeline apropriado.
+ *
+ * ATENÇÃO — o ganho é POR FONTE. A MeetRoom não usa <RoomAudioRenderer>: quem
+ * toca TODO o áudio remoto é este componente. Enquanto ele assinava só
+ * Microphone, o áudio de quem compartilhava a tela simplesmente não existia
+ * do lado do receptor ("compartilhei o vídeo e ninguém ouviu"). Agora
+ * ScreenShareAudio também entra — mas com ganho NEUTRO (1.0), nunca o boost
+ * do slider: o boost existe pra realçar voz captada por microfone, e áudio de
+ * guia/sistema já chega em nível de linha; multiplicá-lo clipa/estoura o som.
  */
 import { useEffect, useMemo, useRef } from "react";
 import { useTracks, useRoomContext } from "@livekit/components-react";
@@ -21,6 +29,8 @@ import { useMeetPreferences } from "@/hooks/useMeetPreferences";
 
 interface NodeBundle {
   mode: "native" | "boost";
+  /** Áudio de tela ignora o slider de volume remoto (ganho fixo em 1.0). */
+  isScreenShare: boolean;
   audioEl: HTMLAudioElement;
   source?: MediaStreamAudioSourceNode;
   gain?: GainNode;
@@ -36,23 +46,31 @@ export function BoostedAudioRenderer() {
   const ctxRef = useRef<AudioContext | null>(null);
   const nodesRef = useRef<Map<string, NodeBundle>>(new Map());
 
-  // Subscreve todas as faixas de microphone remotas
-  const tracks = useTracks([Track.Source.Microphone], { onlySubscribed: true });
+  // Todas as faixas de áudio remotas: microfone E áudio da tela compartilhada.
+  const tracks = useTracks(
+    [Track.Source.Microphone, Track.Source.ScreenShareAudio],
+    { onlySubscribed: true },
+  );
 
   const remoteAudioTracks = useMemo(
     () =>
       tracks
+        // Filtrar o participante local é obrigatório inclusive para o áudio de
+        // tela: quem compartilha já ouve a própria guia pelos alto-falantes;
+        // reproduzir a volta do servidor causaria eco/microfonia.
         .filter((t) => t.participant.identity !== room?.localParticipant?.identity)
         .map((t) => ({
           id: `${t.participant.identity}:${t.publication.trackSid}`,
+          isScreenShare: t.source === Track.Source.ScreenShareAudio,
           track: t.publication.track as RemoteAudioTrack | undefined,
         }))
-        .filter((x): x is { id: string; track: RemoteAudioTrack } => !!x.track),
+        .filter(
+          (x): x is { id: string; isScreenShare: boolean; track: RemoteAudioTrack } => !!x.track,
+        ),
     [tracks, room?.localParticipant?.identity],
   );
 
   const targetGain = Math.min(MAX_GAIN, Math.max(0, prefs.remoteAudioGain));
-  const wantsBoost = targetGain > 1.0;
 
   // Cria AudioContext sob demanda (só quando o boost estiver ativo)
   const ensureCtx = () => {
@@ -87,16 +105,18 @@ export function BoostedAudioRenderer() {
 
   // Sincroniza nós com as tracks remotas atuais e com o modo escolhido (native vs boost)
   useEffect(() => {
-    const desiredMode: NodeBundle["mode"] = wantsBoost ? "boost" : "native";
-
     const seen = new Set<string>();
-    for (const { id, track } of remoteAudioTracks) {
+    for (const { id, track, isScreenShare } of remoteAudioTracks) {
+      // Ganho por fonte: microfone segue o slider; tela fica sempre neutra.
+      const trackGain = isScreenShare ? 1.0 : targetGain;
+      const desiredMode: NodeBundle["mode"] = trackGain > 1.0 ? "boost" : "native";
+
       seen.add(id);
       const existing = nodesRef.current.get(id);
       // Se já existe no mesmo modo, só ajusta o ganho/volume
       if (existing && existing.mode === desiredMode) {
         if (desiredMode === "native") {
-          existing.audioEl.volume = Math.min(1, targetGain);
+          existing.audioEl.volume = Math.min(1, trackGain);
         }
         continue;
       }
@@ -113,9 +133,9 @@ export function BoostedAudioRenderer() {
       if (desiredMode === "native") {
         // Modo nativo: <audio> toca direto — A/V sincronizado pelo browser
         audioEl.muted = false;
-        audioEl.volume = Math.min(1, targetGain);
+        audioEl.volume = Math.min(1, trackGain);
         audioEl.play().catch(() => { /* será iniciado por user gesture */ });
-        nodesRef.current.set(id, { mode: "native", audioEl });
+        nodesRef.current.set(id, { mode: "native", isScreenShare, audioEl });
       } else {
         // Modo boost: <audio> mudo + Web Audio com GainNode
         const ctx = ensureCtx();
@@ -124,7 +144,7 @@ export function BoostedAudioRenderer() {
           audioEl.muted = false;
           audioEl.volume = 1;
           audioEl.play().catch(() => undefined);
-          nodesRef.current.set(id, { mode: "native", audioEl });
+          nodesRef.current.set(id, { mode: "native", isScreenShare, audioEl });
           continue;
         }
         if (ctx.state === "suspended") {
@@ -135,9 +155,9 @@ export function BoostedAudioRenderer() {
         try {
           const source = ctx.createMediaStreamSource(mediaStream);
           const gain = ctx.createGain();
-          gain.gain.value = targetGain;
+          gain.gain.value = trackGain;
           // Compressor só em boost alto — evita latência/coloração em uso normal.
-          if (targetGain >= COMPRESSOR_THRESHOLD_GAIN) {
+          if (trackGain >= COMPRESSOR_THRESHOLD_GAIN) {
             const compressor = ctx.createDynamicsCompressor();
             compressor.threshold.value = -6;
             compressor.knee.value = 12;
@@ -145,17 +165,17 @@ export function BoostedAudioRenderer() {
             compressor.attack.value = 0.003;
             compressor.release.value = 0.2;
             source.connect(gain).connect(compressor).connect(ctx.destination);
-            nodesRef.current.set(id, { mode: "boost", audioEl, source, gain, compressor });
+            nodesRef.current.set(id, { mode: "boost", isScreenShare, audioEl, source, gain, compressor });
           } else {
             source.connect(gain).connect(ctx.destination);
-            nodesRef.current.set(id, { mode: "boost", audioEl, source, gain });
+            nodesRef.current.set(id, { mode: "boost", isScreenShare, audioEl, source, gain });
           }
         } catch (err) {
           console.warn("[BoostedAudioRenderer] falha createMediaStreamSource:", err);
           // Fallback nativo se Web Audio falhar
           audioEl.muted = false;
           audioEl.volume = 1;
-          nodesRef.current.set(id, { mode: "native", audioEl });
+          nodesRef.current.set(id, { mode: "native", isScreenShare, audioEl });
         }
       }
     }
@@ -167,12 +187,14 @@ export function BoostedAudioRenderer() {
         nodesRef.current.delete(id);
       }
     }
-  }, [remoteAudioTracks, wantsBoost, targetGain]);
+  }, [remoteAudioTracks, targetGain]);
 
   // Atualiza o ganho em tempo real (sem recriar nós) quando dentro do mesmo modo
   useEffect(() => {
     const ctx = ctxRef.current;
     for (const bundle of nodesRef.current.values()) {
+      // Áudio de tela é imune ao slider — seu ganho permanece em 1.0.
+      if (bundle.isScreenShare) continue;
       if (bundle.mode === "boost" && bundle.gain && ctx) {
         try {
           bundle.gain.gain.setTargetAtTime(targetGain, ctx.currentTime, 0.05);

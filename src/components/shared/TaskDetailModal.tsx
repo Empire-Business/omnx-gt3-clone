@@ -31,6 +31,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StatusBadge, AvatarBadge } from "@/components/shared/SharedComponents";
+import { ImageLightbox, type LightboxImage } from "@/components/shared/ImageLightbox";
 import { RecurrenceConfig } from "@/components/shared/RecurrenceConfig";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -269,6 +270,10 @@ function SidebarField({ label, children }: SidebarFieldProps) {
 function TaskDetailContent({
   task, onClose, onSave, onDelete, onSyncAssignees, employees, projects, projectId, canEdit,
 }: Omit<TaskDetailModalProps, "open" | "onOpenChange"> & { onClose: () => void }) {
+  // Visualizador de imagens: anexos e imagens da descrição abrem AQUI, sobre a
+  // tarefa, em vez de numa aba do navegador (que fazia o usuário perder o
+  // contexto — e, no PWA instalado, sair do app).
+  const [lightbox, setLightbox] = useState<{ images: LightboxImage[]; index: number } | null>(null);
   const [title, setTitle] = useState(task!.title);
   const [description, setDescription] = useState(task!.description || "");
   const [priority, setPriority] = useState<TaskPriority>((task!.priority || "medium") as TaskPriority);
@@ -858,20 +863,21 @@ function TaskDetailContent({
       <div className="space-y-2">
         {parseRichTextWithImages(content).map((segment, index) => {
           if (segment.type === "image") {
+            const src = normalizeSupabaseAssetUrl(segment.url) || segment.url;
             return (
-              <a
+              <button
                 key={`${segment.url}-${index}`}
-                href={normalizeSupabaseAssetUrl(segment.url) || segment.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block"
+                type="button"
+                onClick={() => setLightbox({ images: [{ url: src, name: segment.alt || undefined }], index: 0 })}
+                className="block cursor-zoom-in"
+                title="Ampliar imagem"
               >
                 <img
-                  src={normalizeSupabaseAssetUrl(segment.url) || segment.url}
+                  src={src}
                   alt={segment.alt}
                   className="max-h-72 w-auto max-w-full rounded-lg border border-border/50 object-contain"
                 />
-              </a>
+              </button>
             );
           }
 
@@ -1478,11 +1484,21 @@ function TaskDetailContent({
                                   key={idx}
                                   className="group relative flex-shrink-0 w-[260px] aspect-[16/10] rounded-lg overflow-hidden border border-border/60 bg-muted snap-start"
                                 >
-                                  <a
-                                    href={normalizeSupabaseAssetUrl(att.url) || att.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block w-full h-full"
+                                  <button
+                                    type="button"
+                                    onClick={() => setLightbox({
+                                      images: imageAttachments.map(({ att: a }) => ({
+                                        url: normalizeSupabaseAssetUrl(a.url) || a.url,
+                                        name: a.name,
+                                        caption: formatFileSize(a.size),
+                                      })),
+                                      // Índice DENTRO da lista de imagens, não do
+                                      // array de anexos: os arquivos não-imagem não
+                                      // entram no visualizador.
+                                      index: imageAttachments.findIndex((x) => x.idx === idx),
+                                    })}
+                                    className="block w-full h-full cursor-zoom-in"
+                                    title="Ampliar imagem"
                                   >
                                     <img
                                       src={normalizeSupabaseAssetUrl(att.url) || att.url}
@@ -1490,7 +1506,7 @@ function TaskDetailContent({
                                       className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]"
                                       loading="lazy"
                                     />
-                                  </a>
+                                  </button>
 
                                   {/* Gradiente + nome do arquivo na base */}
                                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2 pointer-events-none">
@@ -1991,6 +2007,15 @@ function TaskDetailContent({
           </div>
         </DialogContent>
       </Dialog>
+
+      {lightbox && (
+        <ImageLightbox
+          images={lightbox.images}
+          index={lightbox.index}
+          onIndexChange={(i) => setLightbox((prev) => (prev ? { ...prev, index: i } : prev))}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </ScrollArea>
   );
 }

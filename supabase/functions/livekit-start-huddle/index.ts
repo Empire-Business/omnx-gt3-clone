@@ -1,9 +1,41 @@
 /**
- * livekit-start-huddle — v8.7.8
- * Inicia um huddle (chamada rápida) numa conversa do chat.
- * - Cria registro chat_huddles (status='active')
- * - Posta system message no chat com link clicável
+ * livekit-start-huddle — v8.39.1
+ * Inicia um huddle (chamada rápida) num canal do chat.
+ * - Cria registro em `chat_huddles`
+ * - Posta mensagem no chat com um attachment `type: "huddle"` (o `HuddleCard`
+ *   do `src/pages/Chat.tsx` renderiza a partir dele)
  * - Retorna { huddle_id, room_name }
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * REESCRITA EM 2026-08-31 — esta função estava 100% quebrada em produção.
+ *
+ * Ela era escrita contra um schema que NÃO EXISTE neste banco. Seis
+ * divergências, todas confirmadas por consulta ao banco real
+ * (projeto opbdoulspzlabxzevffc) e não ao `types.ts`, que está defasado:
+ *
+ *   o código usava            │ a produção tem
+ *   ──────────────────────────┼──────────────────────────────────────────────
+ *   tabela chat_participants  │ chat_channel_members(channel_id, user_id, ...)
+ *   chat_huddles.conversation_id │ chat_huddles.channel_id
+ *   chat_huddles.livekit_room_name │ chat_huddles.room_name
+ *   chat_huddles.status='active' │ não existe coluna status; ativo = ended_at IS NULL
+ *   chat_messages.conversation_id │ chat_messages.channel_id
+ *   chat_messages.employee_id / .type │ chat_messages.author_id (+ attachments jsonb)
+ *
+ * Ou seja: a primeira consulta já falhava e todo huddle morria em
+ * "Not a participant of this conversation" (403). O frontend, curiosamente,
+ * SEMPRE esteve certo — o `HuddleCard` lê `channel_id`/`ended_at`.
+ *
+ * Convenções confirmadas nos DADOS, porque os comentários do repo erravam:
+ *   • chat_huddles.started_by  = auth.users.id  (14 de 14 linhas)
+ *   • chat_messages.author_id  = auth.users.id  (17.983 de 17.983 linhas)
+ * Um comentário em `system-bot-notify` afirma que "chat_messages usa
+ * employee_id" — não usa.
+ *
+ * O parâmetro de entrada continua chamando-se `conversation_id` por
+ * compatibilidade com `useStartHuddle` (src/hooks/useLiveKit.ts), mas o valor
+ * é o id do CANAL. `channel_id` também é aceito.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -37,8 +69,9 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Unauthorized" }, 401);
     }
 
-    const { conversation_id } = await req.json().catch(() => ({}));
-    if (!conversation_id) return json({ error: "conversation_id required" }, 400);
+    const body = await req.json().catch(() => ({}));
+    const channelId: string | undefined = body?.channel_id || body?.conversation_id;
+    if (!channelId) return json({ error: "channel_id required" }, 400);
 
     const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
@@ -49,27 +82,42 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
     if (!emp) return json({ error: "Employee not found" }, 403);
 
-    // Garante que é participante da conversa
-    const { data: part } = await admin
-      .from("chat_participants")
-      .select("id")
-      .eq("conversation_id", conversation_id)
-      .eq("employee_id", emp.id)
+    // Membership do canal: a tabela é chat_channel_members e a chave é o
+    // user_id do auth, não o employee_id.
+    const { data: member, error: memberErr } = await admin
+      .from("chat_channel_members")
+      .select("channel_id")
+      .eq("channel_id", channelId)
+      .eq("user_id", userId)
       .maybeSingle();
-    if (!part) return json({ error: "Not a participant of this conversation" }, 403);
+    if (memberErr) throw memberErr;
+    if (!member) return json({ error: "Not a member of this channel" }, 403);
 
-    // Reaproveita huddle ativo se já houver
+    // O canal precisa ser do mesmo tenant de quem está chamando — sem isso,
+    // conhecer um id de canal de outro tenant abriria uma sala nele.
+    const { data: channel } = await admin
+      .from("chat_channels")
+      .select("id, tenant_id, name")
+      .eq("id", channelId)
+      .maybeSingle();
+    if (!channel || channel.tenant_id !== emp.tenant_id) {
+      return json({ error: "Not a member of this channel" }, 403);
+    }
+
+    // Huddle ativo = ainda não encerrado. Não existe coluna `status`.
     const { data: existing } = await admin
       .from("chat_huddles")
-      .select("id, livekit_room_name")
-      .eq("conversation_id", conversation_id)
-      .eq("status", "active")
+      .select("id, room_name")
+      .eq("channel_id", channelId)
+      .is("ended_at", null)
+      .order("started_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (existing) {
       return json({
         huddle_id: existing.id,
-        room_name: existing.livekit_room_name,
+        room_name: existing.room_name,
         reused: true,
       });
     }
@@ -80,22 +128,29 @@ Deno.serve(async (req: Request) => {
       .from("chat_huddles")
       .insert({
         tenant_id: emp.tenant_id,
-        conversation_id,
-        livekit_room_name: roomName,
-        started_by: emp.id,
-        status: "active",
+        channel_id: channelId,
+        room_name: roomName,
+        started_by: userId,
       })
-      .select("id, livekit_room_name")
+      .select("id, room_name")
       .single();
     if (hErr) throw hErr;
 
-    // Posta system message
-    await admin.from("chat_messages").insert({
-      conversation_id,
-      employee_id: emp.id,
-      type: "huddle_started",
-      content: JSON.stringify({ huddle_id: huddle.id, room_name: roomName }),
+    // Mensagem no chat. O `HuddleCard` (Chat.tsx) lê `attachment.huddle_id`,
+    // então o attachment é o contrato — não o texto.
+    const { error: msgErr } = await admin.from("chat_messages").insert({
+      channel_id: channelId,
+      tenant_id: emp.tenant_id,
+      author_id: userId,
+      content: "Iniciou uma chamada",
+      attachments: [{ type: "huddle", huddle_id: huddle.id, room_name: roomName }],
     });
+    // A chamada já existe; falhar em anunciá-la no chat não pode desfazê-la.
+    // Mas o erro precisa aparecer no log — foi o silêncio que escondeu os bugs
+    // anteriores desta função.
+    if (msgErr) {
+      console.error("[livekit-start-huddle] huddle criado, mas a mensagem no chat falhou:", msgErr.message);
+    }
 
     return json({ huddle_id: huddle.id, room_name: roomName, reused: false });
   } catch (err) {

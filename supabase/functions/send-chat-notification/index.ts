@@ -100,13 +100,54 @@ Deno.serve(async (req) => {
 
     if (!members?.length) return json({ sent: 0 });
 
-    const userIds = (members as any[]).map((m) => m.user_id);
+    let userIds = (members as any[]).map((m) => m.user_id);
 
+    // Silenciar conversa (grupo ou DM) precisa valer para o push também.
+    // Sem este filtro o celular apitava mesmo com o canal silenciado — era
+    // o sintoma de "silenciei e não para de apitar" relatado em produção.
+    const { data: mutes } = await supabase
+      .from("chat_channel_mutes")
+      .select("user_id, expires_at")
+      .eq("channel_id", msg.channel_id)
+      .in("user_id", userIds);
+
+    const now = Date.now();
+    const mutedUserIds = new Set(
+      (mutes || [])
+        .filter((m: any) => !m.expires_at || new Date(m.expires_at).getTime() > now)
+        .map((m: any) => m.user_id),
+    );
+
+    // Silenciamento global de notificações de chat (sininho → "Silenciar
+    // mensagens" / "Silenciar tudo"), independente do canal.
+    const { data: globalMutes } = await supabase
+      .from("notification_mutes")
+      .select("user_id, expires_at")
+      .in("user_id", userIds)
+      .in("kind", ["all", "chat"]);
+
+    for (const m of (globalMutes || []) as any[]) {
+      if (!m.expires_at || new Date(m.expires_at).getTime() > now) mutedUserIds.add(m.user_id);
+    }
+
+    if (mutedUserIds.size) {
+      userIds = userIds.filter((id) => !mutedUserIds.has(id));
+      console.log(`[push] canal ${msg.channel_id}: ${mutedUserIds.size} destinatário(s) silenciado(s), ignorados`);
+    }
+
+    if (!userIds.length) return json({ sent: 0, muted: mutedUserIds.size });
+
+    // `status = 'active'`: quem foi desativado, afastado ou desligado NAO
+    // recebe push. Sem este filtro, desativar a pessoa em Colaboradores
+    // tirava o acesso dela e o celular continuava apitando — foi o mesmo
+    // furo que fazia o digest por e-mail seguir saindo para quem ja tinha
+    // saido (corrigido na migration 20260903130000).
     const { data: empRows } = await supabase
       .from("employees")
       .select("id, user_id")
       .in("user_id", userIds)
-      .eq("tenant_id", msg.tenant_id);
+      .eq("tenant_id", msg.tenant_id)
+      .eq("status", "active");
 
     const empIds = [...new Set((empRows || []).map((e: any) => e.id))];
     if (!empIds.length) return json({ sent: 0 });
@@ -118,12 +159,14 @@ Deno.serve(async (req) => {
 
     if (!subs?.length || !vapid.publicKey || !vapid.privateKey) return json({ sent: 0 });
 
-    const chatUrl = `${Deno.env.get("SITE_URL") ?? "https://gt3.omnx.pro"}/chat/${msg.channel_id}`;
+    // URL RELATIVA e sem `icon`: quem resolve ambos é o service worker, pelo
+    // próprio origin. Com SITE_URL apontando para um domínio antigo, o ícone
+    // não carregava (círculo branco no Android) e o clique levava a um site morto.
+    const chatUrl = `/chat/${msg.channel_id}`;
     const title = isDm ? senderName : `${senderName} em #${channelName}`;
     const payload = {
       title,
       body: preview,
-      icon: `${Deno.env.get("SITE_URL") ?? "https://gt3.omnx.pro"}/logo.png`,
       tag: `chat-${msg.channel_id}`,
       data: { url: chatUrl, channel_id: msg.channel_id },
     };

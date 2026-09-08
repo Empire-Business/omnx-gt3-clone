@@ -1,7 +1,42 @@
 /**
- * livekit-token — v8.7.8
+ * livekit-token — v8.36.0
  * Gera JWT por role (host/guest/observer) para entrar numa sala LiveKit.
  * Valida JWT do Supabase e checa que o caller é membro da meeting/huddle.
+ *
+ * ── Correções desta versão ────────────────────────────────────────────────
+ *
+ * BUG 1 — Huddles do chat davam 403 SEMPRE.
+ *   A checagem lia `chat_huddles.room_name` + `chat_huddles.channel_id` e a
+ *   tabela `chat_channel_members`. Nada disso existe no schema atual (só no
+ *   dump baseline antigo `00000000000000_init.sql`, que está defasado).
+ *   O schema real (src/integrations/supabase/types.ts + o INSERT feito por
+ *   `livekit-start-huddle`) é:
+ *     chat_huddles(id, tenant_id, conversation_id, livekit_room_name,
+ *                  started_by [= employees.id], status, ...)
+ *   e a participação vive em `chat_participants(conversation_id, employee_id)`
+ *   apontando para `chat_conversations`. `chat_channel_members` NÃO EXISTE —
+ *   a query falhava (relation inexistente), `member` vinha null e todo mundo
+ *   caía em "Forbidden: not a member of this room".
+ *
+ * BUG 2 — Dependência circular: era impossível entrar numa sala fora de /reunioes.
+ *   Esta função exigia uma linha em `meetings` com aquele `livekit_room_name`,
+ *   mas quem criava essa linha era o client (`useMeetingByRoomName`) apenas
+ *   quando `createIfMissing: isHost` — e `isHost` só é conhecido DEPOIS do
+ *   token. Ou seja: sem linha não há token, sem token não há host, sem host
+ *   não há linha. `/meet/<qualquer-coisa>` dava 403 eterno.
+ *   Decisão: a criação passa a ser feita AQUI, no servidor, que é onde a
+ *   decisão é segura (service_role + identidade já validada). Regras:
+ *     - só um usuário AUTENTICADO e com `employees` do tenant provisiona;
+ *     - a linha nasce com o `tenant_id` do próprio caller (zero vazamento
+ *       entre tenants) e `created_by = auth.uid()`, tornando-o o criador;
+ *     - salas de huddle (prefixo `huddle-`/`huddle_`) NUNCA são provisionadas
+ *       como meeting: elas têm que existir em `chat_huddles`, senão é 403;
+ *     - corrida entre dois participantes entrando ao mesmo tempo é tratada
+ *       pelo índice único `meetings_livekit_room_name_key`: em conflito
+ *       (23505) relemos a linha vencedora e seguimos o fluxo normal — quem
+ *       perdeu a corrida vira guest pela regra de downgrade abaixo;
+ *     - o fluxo que já funciona (reunião criada em /reunioes) é inalterado:
+ *       a linha já existe e o código cai no mesmo caminho de antes.
  */
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { AccessToken } from "https://esm.sh/livekit-server-sdk@2.7.0";
@@ -66,12 +101,20 @@ Deno.serve(async (req: Request) => {
     if (!emp) return json({ error: "Employee not found" }, 403);
 
     // Permite acessar se a sala pertence a uma meeting do tenant OU a um huddle
-    // do qual o employee é participante.
-    const { data: meeting } = await admin
-      .from("meetings")
-      .select("id, tenant_id, created_by")
-      .eq("livekit_room_name", roomName)
-      .maybeSingle();
+    // do qual o employee é participante. Se não existir em lugar nenhum, a sala
+    // é provisionada aqui (ver BUG 2 no cabeçalho).
+    const isHuddleRoom = /^huddle[-_]/i.test(roomName);
+
+    async function findMeeting() {
+      const { data } = await admin
+        .from("meetings")
+        .select("id, tenant_id, created_by")
+        .eq("livekit_room_name", roomName)
+        .maybeSingle();
+      return data as { id: string; tenant_id: string; created_by: string | null } | null;
+    }
+
+    let meeting = await findMeeting();
 
     let allowed = false;
     let isCreator = false;
@@ -82,23 +125,83 @@ Deno.serve(async (req: Request) => {
         if (meeting.created_by && meeting.created_by === userId) isCreator = true;
       }
     } else {
+      // ATENÇÃO — NÃO "corrija" estes nomes de coluna sem consultar o BANCO.
+      //
+      // Em 2026-08-31 este bloco foi reescrito para `livekit_room_name` /
+      // `conversation_id` / `chat_participants`, por conferir apenas o
+      // `src/integrations/supabase/types.ts` e a `livekit-start-huddle`. Um
+      // smoke test contra o banco de PRODUÇÃO (opbdoulspzlabxzevffc) mostrou
+      // que o schema real é outro:
+      //
+      //   chat_huddles(id, channel_id, tenant_id, room_name, started_by, ...)
+      //   chat_channel_members(channel_id, user_id, joined_at, last_read_at, role)
+      //
+      // Não existem `chat_participants` nem `chat_conversations` em produção.
+      // Consulta a coluna inexistente devolve erro, `data` fica null, `allowed`
+      // fica false — ou seja, a "correção" causava exatamente o 403 que ela
+      // dizia estar consertando. Revertido para o schema real.
+      //
+      // O `types.ts` e a `livekit-start-huddle` descrevem um schema que o banco
+      // de produção NÃO tem: a própria `livekit-start-huddle` insere
+      // `conversation_id`/`livekit_room_name` e portanto falha lá. Isso é uma
+      // divergência repo↔banco a resolver à parte — não neste arquivo.
       const { data: huddle } = await admin
         .from("chat_huddles")
         .select("id, tenant_id, channel_id, started_by")
         .eq("room_name", roomName)
         .maybeSingle();
 
-      if (huddle && huddle.tenant_id === emp.tenant_id) {
-        const { data: member } = await admin
-          .from("chat_channel_members")
-          .select("id")
-          .eq("channel_id", huddle.channel_id)
-          .eq("user_id", userId)
-          .maybeSingle();
-        if (member) {
+      if (huddle) {
+        if (huddle.tenant_id === emp.tenant_id) {
+          const { data: member } = await admin
+            .from("chat_channel_members")
+            .select("channel_id")
+            .eq("channel_id", huddle.channel_id)
+            .eq("user_id", userId)
+            .maybeSingle();
+          if (member) {
+            allowed = true;
+            // started_by armazena auth.uid(), conforme a RLS policy.
+            if (huddle.started_by === userId) isCreator = true;
+          }
+        }
+      } else if (!isHuddleRoom) {
+        // BUG 2: sala inexistente → o próprio servidor a cria para este usuário
+        // autenticado, que passa a ser o host/criador. Sempre com o tenant_id
+        // do caller, nunca com dado vindo do body.
+        const { data: created, error: insErr } = await admin
+          .from("meetings")
+          .insert({
+            title: body.meetingTitle || `Reunião ${new Date().toISOString()}`,
+            tenant_id: emp.tenant_id,
+            created_by: userId,
+            status: "recording",
+            started_at: new Date().toISOString(),
+            meeting_mode: "livekit",
+            livekit_room_name: roomName,
+            recording_status: "pending",
+            approval_status: "pending",
+          })
+          .select("id, tenant_id, created_by")
+          .single();
+
+        if (insErr) {
+          // Corrida: outro participante criou a mesma sala entre o SELECT e o
+          // INSERT. O índice único meetings_livekit_room_name_key barra o
+          // segundo INSERT (23505) — relemos a linha vencedora e seguimos.
+          if ((insErr as { code?: string }).code === "23505") {
+            meeting = await findMeeting();
+            if (meeting && meeting.tenant_id === emp.tenant_id) {
+              allowed = true;
+              if (meeting.created_by && meeting.created_by === userId) isCreator = true;
+            }
+          } else {
+            throw insErr;
+          }
+        } else if (created) {
+          meeting = created as typeof meeting;
           allowed = true;
-          // started_by armazena auth.uid() conforme RLS policy
-          if (huddle.started_by === userId) isCreator = true;
+          isCreator = true;
         }
       }
     }
