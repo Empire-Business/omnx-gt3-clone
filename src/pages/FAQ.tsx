@@ -268,7 +268,7 @@ A API permite **100 requisições por minuto** por IP. Os headers de resposta in
 
 \`\`\`bash
 curl -H "Authorization: Bearer TOKEN" \\
-  https://opbdoulspzlabxzevffc.supabase.co/functions/v1/api/projects?limit=10
+  https://SEU-PROJETO.supabase.co/functions/v1/api/projects?limit=10
 \`\`\`
 `,
   },

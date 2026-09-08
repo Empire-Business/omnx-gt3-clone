@@ -26,6 +26,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Database } from "@/integrations/supabase/types";
+import { getDirectSupabaseUrl } from "@/integrations/supabase/config";
 
 type AppRole = Database["public"]["Enums"]["app_role"];
 
@@ -528,8 +529,16 @@ interface ApiKeyRow {
   created_at: string;
 }
 
-const AGENT_GATEWAY_URL =
-  "https://opbdoulspzlabxzevffc.supabase.co/functions/v1/agent-gateway";
+/*
+ * O endereco sai da configuracao, nao fica escrito aqui.
+ *
+ * Estava fixo no projeto Supabase da OMNX. Em producao dava no mesmo — e o
+ * mesmo projeto. Mas este codigo tambem vira o template de clonagem: o cliente
+ * instalava a plataforma na conta dele e o app continuava chamando a edge
+ * function DA OMNX, com o custo e os dados caindo do nosso lado. Ele nao teria
+ * como perceber, porque funcionava.
+ */
+const AGENT_GATEWAY_URL = `${getDirectSupabaseUrl()}/functions/v1/agent-gateway`;
 
 function APICard({ onViewDocs }: { onViewDocs: () => void }) {
   const qc = useQueryClient();
